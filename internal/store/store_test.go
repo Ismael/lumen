@@ -522,3 +522,51 @@ func TestStore_FileBasedReadConnection(t *testing.T) {
 		t.Fatal("expected write on read connection to fail (query_only=ON)")
 	}
 }
+
+func TestReadMetaAt_ReturnsStoredValue(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	s, err := New(dbPath, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMeta("project_path", "/some/project"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadMetaAt(dbPath, "project_path")
+	if err != nil {
+		t.Fatalf("ReadMetaAt: %v", err)
+	}
+	if got != "/some/project" {
+		t.Fatalf("ReadMetaAt(project_path) = %q, want %q", got, "/some/project")
+	}
+}
+
+func TestReadMetaAt_MissingKeyReturnsEmpty(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	s, err := New(dbPath, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadMetaAt(dbPath, "project_path")
+	if err != nil {
+		t.Fatalf("ReadMetaAt on empty meta: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("ReadMetaAt missing key = %q, want empty", got)
+	}
+}
+
+func TestReadMetaAt_MissingFileReturnsError(t *testing.T) {
+	_, err := ReadMetaAt(filepath.Join(t.TempDir(), "does-not-exist.db"), "project_path")
+	if err == nil {
+		t.Fatal("expected error for missing DB file")
+	}
+}

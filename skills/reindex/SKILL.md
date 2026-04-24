@@ -15,7 +15,10 @@ Refresh or rebuild the bundled Lumen index for the current project.
    `semantic_search` tool with a broad natural-language query and set `path` or
    `cwd` to the current working directory. The search tool refreshes stale or
    missing indexes automatically.
-3. If the user explicitly asks for a clean rebuild, explain that
-   `lumen purge && lumen index .` deletes cached indexes before rebuilding,
-   then run it via the shell.
+3. If the user explicitly asks for a clean rebuild, explain the options and
+   run one via the shell:
+   - `lumen purge . && lumen index .` — deletes only the current project's
+     cached index before rebuilding. Prefer this.
+   - `lumen purge && lumen index .` — deletes every cached index on the host
+     before rebuilding. Use only when the user asks for a full wipe.
 4. After the refresh or rebuild, report the new index status.

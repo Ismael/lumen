@@ -295,6 +295,37 @@ func resetAndRecreateVecTable(db *sql.DB, dimensions int) error {
 	return createVecTable(db, dimensions)
 }
 
+// ReadMetaAt opens the SQLite database at dbPath read-only and returns the
+// project_meta value for key, or "" if the key is missing. It is safe to call
+// on databases created by older binaries with a different schema version; the
+// function performs no migrations and holds no write lock. Returns an error
+// only when the file cannot be opened (missing file, permission denied) or
+// when the project_meta table is missing (the file is not a lumen index).
+func ReadMetaAt(dbPath, key string) (string, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return "", fmt.Errorf("stat %s: %w", dbPath, err)
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return "", fmt.Errorf("open %s: %w", dbPath, err)
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("PRAGMA query_only=ON"); err != nil {
+		return "", fmt.Errorf("set query_only: %w", err)
+	}
+
+	var val string
+	err = db.QueryRow("SELECT value FROM project_meta WHERE key = ?", key).Scan(&val)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("query project_meta: %w", err)
+	}
+	return val, nil
+}
+
 // SetMeta upserts a key-value pair in the project_meta table.
 func (s *Store) SetMeta(key, value string) error {
 	_, err := s.db.Exec(

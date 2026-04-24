@@ -368,6 +368,7 @@ func (idx *Indexer) indexWithTree(ctx context.Context, projectDir, oldRootHash s
 		metaSaved = true
 		_ = idx.store.SetMeta("root_hash", curTree.RootHash)
 		_ = idx.store.SetMeta("embedding_model", idx.emb.ModelName())
+		_ = idx.store.SetMeta("project_path", projectDir)
 		_ = idx.store.SetMeta("last_indexed_at", time.Now().UTC().Format(time.RFC3339))
 		_ = idx.store.SetMeta("total_files", strconv.Itoa(stats.TotalFiles))
 	}

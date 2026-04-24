@@ -986,3 +986,27 @@ func writeGoFile(t *testing.T, dir, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestIndexer_StoresProjectPathMeta(t *testing.T) {
+	projectDir := t.TempDir()
+	writeGoFile(t, projectDir, "main.go", "package main\n\nfunc Hello() {}\n")
+
+	emb := &mockEmbedder{dims: 4, model: "test-model"}
+	idx, err := NewIndexer(":memory:", emb, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	if _, err := idx.Index(context.Background(), projectDir, false, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := idx.store.GetMeta("project_path")
+	if err != nil {
+		t.Fatalf("GetMeta(project_path): %v", err)
+	}
+	if got != projectDir {
+		t.Fatalf("project_path meta = %q, want %q", got, projectDir)
+	}
+}
