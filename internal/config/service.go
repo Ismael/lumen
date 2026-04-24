@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +35,8 @@ type ConfigService struct {
 	mu            sync.RWMutex
 	configPath    string
 	modelOverride string // set via WithModelOverride, applied after env vars
+	selectModel   string // set via WithServerSelection, filters server list
+	selectBackend string // set via WithServerSelection, filters server list
 	watcher       *fsnotify.Watcher
 	stopCh        chan struct{}
 	stopOnce      sync.Once
@@ -82,6 +85,18 @@ func WithModelOverride(model string) Option {
 	return func(s *ConfigService) { s.modelOverride = model }
 }
 
+// WithServerSelection restricts the servers list to entries whose model and/or
+// backend match the given values. An empty string for a field means "don't
+// filter by that field"; passing both empty is a no-op. Model names are
+// alias-resolved on both sides before comparison. If the filter matches zero
+// servers, NewConfigService returns a descriptive error.
+func WithServerSelection(model, backend string) Option {
+	return func(s *ConfigService) {
+		s.selectModel = model
+		s.selectBackend = backend
+	}
+}
+
 // NewConfigService creates a ConfigService. configPath is the YAML file path
 // (empty string means no file). Environment variables are always loaded.
 func NewConfigService(configPath string, opts ...Option) (*ConfigService, error) {
@@ -126,10 +141,65 @@ func NewConfigService(configPath string, opts ...Option) (*ConfigService, error)
 		}
 	}
 
+	// Layer 5: CLI server selection filter (WithServerSelection).
+	if svc.selectModel != "" || svc.selectBackend != "" {
+		var servers []ServerConfig
+		_ = k.Unmarshal("servers", &servers)
+		filtered := filterServers(servers, svc.selectModel, svc.selectBackend)
+		if len(filtered) == 0 {
+			return nil, fmt.Errorf(
+				"no server matches --model=%q --backend=%q; configured: %s",
+				svc.selectModel, svc.selectBackend, describeServers(servers),
+			)
+		}
+		// Drop the existing list first — koanf merge would otherwise keep
+		// stale entries beyond the filtered length.
+		k.Delete("servers")
+		serverMaps := make([]map[string]any, len(filtered))
+		for i, s := range filtered {
+			serverMaps[i] = map[string]any{
+				"backend": s.Backend, "host": s.Host, "model": s.Model,
+				"dims": s.Dims, "ctx_length": s.CtxLength, "min_score": s.MinScore,
+			}
+		}
+		_ = k.Load(confmap.Provider(map[string]any{"servers": serverMaps}, "."), nil)
+	}
+
 	if err := svc.validate(); err != nil {
 		return nil, err
 	}
 	return svc, nil
+}
+
+// filterServers returns the subset of servers matching model and/or backend.
+// Empty model or empty backend means "don't filter by that field". Model
+// names are alias-resolved on both sides before comparison.
+func filterServers(servers []ServerConfig, model, backend string) []ServerConfig {
+	want := resolveModel(model)
+	var out []ServerConfig
+	for _, s := range servers {
+		if model != "" && resolveModel(s.Model) != want {
+			continue
+		}
+		if backend != "" && s.Backend != backend {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// describeServers renders a compact list of configured (backend, model) pairs
+// for inclusion in error messages.
+func describeServers(servers []ServerConfig) string {
+	if len(servers) == 0 {
+		return "[]"
+	}
+	parts := make([]string, len(servers))
+	for i, s := range servers {
+		parts[i] = fmt.Sprintf("(%s, %s)", s.Backend, s.Model)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // applyEnvOverrides reads legacy env vars and merges them into koanf.

@@ -35,6 +35,7 @@ import (
 
 func init() {
 	indexCmd.Flags().StringP("model", "m", "", "embedding model (default: $LUMEN_EMBED_MODEL or "+embedder.DefaultModel+")")
+	indexCmd.Flags().StringP("backend", "b", "", "embedding backend to select (\"ollama\" or \"lmstudio\"); disambiguates when --model is configured on multiple backends")
 	indexCmd.Flags().BoolP("force", "f", false, "force full re-index")
 	rootCmd.AddCommand(indexCmd)
 }
@@ -52,11 +53,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		defer func() { _ = logFile.Close() }()
 	}
 
-	if err := applyModelFlag(cmd); err != nil {
-		return err
-	}
-
-	cfg, err := config.NewConfigService(config.DefaultConfigPath())
+	cfg, err := loadConfigWithFlags(cmd)
 	if err != nil {
 		return err
 	}
@@ -150,21 +147,47 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// applyModelFlag sets LUMEN_EMBED_MODEL so that NewConfigService picks it up.
-func applyModelFlag(cmd *cobra.Command) error {
-	m, _ := cmd.Flags().GetString("model")
-	if m == "" {
-		return nil
+// loadConfigWithFlags loads the ConfigService, honouring the --model and
+// --backend flags if set.
+//
+// Selection flow:
+//  1. No flags set → use YAML/env as-is.
+//  2. --model and/or --backend set → filter the configured servers to matching
+//     entries via WithServerSelection.
+//  3. If no configured server matches and --backend is unset, fall back to
+//     WithModelOverride for models present in the static KnownModels registry.
+//     This preserves backward compatibility for users with no YAML config who
+//     pass e.g. `--model all-minilm`.
+func loadConfigWithFlags(cmd *cobra.Command) (*config.ConfigService, error) {
+	model, _ := cmd.Flags().GetString("model")
+	backend, _ := cmd.Flags().GetString("backend")
+	path := config.DefaultConfigPath()
+
+	if model == "" && backend == "" {
+		return config.NewConfigService(path)
 	}
-	canonical := m
-	if c, ok := embedder.ModelAliases[m]; ok {
-		canonical = c
+	if backend != "" && backend != config.BackendOllama && backend != config.BackendLMStudio {
+		return nil, fmt.Errorf("unknown backend %q (must be %q or %q)",
+			backend, config.BackendOllama, config.BackendLMStudio)
 	}
-	if _, ok := embedder.KnownModels[canonical]; !ok {
-		return fmt.Errorf("unknown embedding model %q", m)
+
+	cfg, selErr := config.NewConfigService(path, config.WithServerSelection(model, backend))
+	if selErr == nil {
+		return cfg, nil
 	}
-	_ = os.Setenv("LUMEN_EMBED_MODEL", m)
-	return nil
+
+	// Fallback: legacy WithModelOverride path for users with no YAML who rely
+	// on the static model registry. Only applies when --backend is unset.
+	if model != "" && backend == "" {
+		canonical := model
+		if c, ok := embedder.ModelAliases[model]; ok {
+			canonical = c
+		}
+		if _, ok := embedder.KnownModels[canonical]; ok {
+			return config.NewConfigService(path, config.WithModelOverride(model))
+		}
+	}
+	return nil, selErr
 }
 
 // setupIndexer receives dbPath so it is computed exactly once in runIndex.

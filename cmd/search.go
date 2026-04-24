@@ -80,6 +80,7 @@ func init() {
 	searchCmd.Flags().BoolP("force", "f", false, "force full re-index before searching")
 	searchCmd.Flags().Bool("trace", false, "print per-phase timing to stderr")
 	searchCmd.Flags().StringP("model", "m", "", "embedding model override")
+	searchCmd.Flags().StringP("backend", "b", "", "embedding backend to select (\"ollama\" or \"lmstudio\")")
 	rootCmd.AddCommand(searchCmd)
 }
 
@@ -114,10 +115,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	}
 
 	// Span 1: path resolution
-	if err := applyModelFlag(cmd); err != nil {
-		return err
-	}
-	cfg, err := config.NewConfigService(config.DefaultConfigPath())
+	cfg, err := loadConfigWithFlags(cmd)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

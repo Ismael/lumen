@@ -307,6 +307,37 @@ Dimensions and context length are configured automatically per model:
 Switching models creates a separate index automatically. The model name is part
 of the database path hash, so different models never collide.
 
+> **Caveat**: the DB path hash includes the model name but not the backend. If
+> the same model name is configured on two backends (e.g. an Ollama and an LM
+> Studio entry both named `foo`), they share the same index — use distinct
+> model names per backend to avoid collisions.
+
+### Selecting a server per invocation
+
+`lumen index` and `lumen search` accept `--model`/`-m` and `--backend`/`-b`
+to pick from a multi-server `config.yaml`. The selection filters the
+configured servers to those matching both fields; failover still works
+within the filtered subset.
+
+```sh
+# Index with the Ollama server matching this model name.
+lumen index --model ordis/jina-embeddings-v2-base-code .
+
+# Same model name hosted on LM Studio (present in YAML, not in the
+# static registry) — accepted because the name is configured.
+lumen index --model text-embedding-jina-embeddings-v2-base-code .
+
+# Disambiguate when the same model is configured on two backends.
+lumen index --model my-embed --backend lmstudio .
+
+# Pick the first configured Ollama server regardless of model.
+lumen search --backend ollama "…"
+```
+
+If `--model` is not configured in YAML but is a known registry model (and
+`--backend` is unset), Lumen falls back to mutating the default server's
+model — preserving `lumen index --model all-minilm .` for users with no YAML.
+
 ### Using a custom or unlisted model
 
 If your model is not in the registry above, set `LUMEN_EMBED_DIMS` to bypass the

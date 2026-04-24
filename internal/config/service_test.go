@@ -426,3 +426,221 @@ func TestWithModelOverride(t *testing.T) {
 		t.Errorf("ServerDims(0) = %d, want 384", got)
 	}
 }
+
+// threeServerYAML is a fixture resembling the real user config: an Ollama
+// server and two LM Studio servers with distinct model names.
+const threeServerYAML = `
+servers:
+  - backend: lmstudio
+    host: http://remote:1234
+    model: text-embedding-nomic-embed-code
+    dims: 3584
+  - backend: lmstudio
+    host: http://remote:1234
+    model: text-embedding-jina-embeddings-v2-base-code
+    dims: 768
+  - backend: ollama
+    host: http://localhost:11434
+    model: ordis/jina-embeddings-v2-base-code
+    dims: 768
+`
+
+func writeThreeServerYAML(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(f, []byte(threeServerYAML), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return f
+}
+
+func clearServerEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"LUMEN_BACKEND", "LUMEN_EMBED_MODEL", "OLLAMA_HOST", "LM_STUDIO_HOST", "LUMEN_EMBED_DIMS", "LUMEN_EMBED_CTX"} {
+		t.Setenv(k, "")
+	}
+}
+
+func TestWithServerSelection_ByModel_UnambiguousYAMLEntry(t *testing.T) {
+	clearServerEnv(t)
+	cfg := writeThreeServerYAML(t)
+	// ordis/jina-embeddings-v2-base-code appears on exactly one server — the
+	// Ollama entry. Filtering by model alone should pick it.
+	svc, err := NewConfigService(cfg, WithServerSelection("ordis/jina-embeddings-v2-base-code", ""))
+	if err != nil {
+		t.Fatalf("NewConfigService: %v", err)
+	}
+	servers := svc.Servers()
+	if len(servers) != 1 {
+		t.Fatalf("Servers() len = %d, want 1", len(servers))
+	}
+	if servers[0].Backend != BackendOllama {
+		t.Errorf("Backend = %q, want %q", servers[0].Backend, BackendOllama)
+	}
+	if servers[0].Host != "http://localhost:11434" {
+		t.Errorf("Host = %q, want http://localhost:11434", servers[0].Host)
+	}
+}
+
+func TestWithServerSelection_ByModel_LMStudioName(t *testing.T) {
+	clearServerEnv(t)
+	cfg := writeThreeServerYAML(t)
+	// The LM-Studio-specific name is not in KnownModels, but it's in the YAML
+	// — filtering by it should pick that LM Studio server.
+	svc, err := NewConfigService(cfg, WithServerSelection("text-embedding-jina-embeddings-v2-base-code", ""))
+	if err != nil {
+		t.Fatalf("NewConfigService: %v", err)
+	}
+	servers := svc.Servers()
+	if len(servers) != 1 {
+		t.Fatalf("Servers() len = %d, want 1", len(servers))
+	}
+	if servers[0].Backend != BackendLMStudio {
+		t.Errorf("Backend = %q, want %q", servers[0].Backend, BackendLMStudio)
+	}
+	if servers[0].Model != "text-embedding-jina-embeddings-v2-base-code" {
+		t.Errorf("Model = %q, want text-embedding-jina-embeddings-v2-base-code", servers[0].Model)
+	}
+}
+
+func TestWithServerSelection_ByModelAndBackend(t *testing.T) {
+	clearServerEnv(t)
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.yaml")
+	// Same model on two backends — backend flag must disambiguate.
+	_ = os.WriteFile(f, []byte(`
+servers:
+  - backend: ollama
+    host: http://a:11434
+    model: duplicate-model
+    dims: 768
+  - backend: lmstudio
+    host: http://b:1234
+    model: duplicate-model
+    dims: 768
+`), 0644)
+	svc, err := NewConfigService(f, WithServerSelection("duplicate-model", BackendLMStudio))
+	if err != nil {
+		t.Fatalf("NewConfigService: %v", err)
+	}
+	servers := svc.Servers()
+	if len(servers) != 1 {
+		t.Fatalf("Servers() len = %d, want 1", len(servers))
+	}
+	if servers[0].Backend != BackendLMStudio {
+		t.Errorf("Backend = %q, want %q", servers[0].Backend, BackendLMStudio)
+	}
+}
+
+func TestWithServerSelection_ByBackendOnly(t *testing.T) {
+	clearServerEnv(t)
+	cfg := writeThreeServerYAML(t)
+	svc, err := NewConfigService(cfg, WithServerSelection("", BackendOllama))
+	if err != nil {
+		t.Fatalf("NewConfigService: %v", err)
+	}
+	servers := svc.Servers()
+	if len(servers) != 1 {
+		t.Fatalf("Servers() len = %d, want 1", len(servers))
+	}
+	if servers[0].Backend != BackendOllama {
+		t.Errorf("Backend = %q, want %q", servers[0].Backend, BackendOllama)
+	}
+}
+
+func TestWithServerSelection_AliasResolution(t *testing.T) {
+	clearServerEnv(t)
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.yaml")
+	// YAML stores the canonical name; user passes the alias. Alias resolution
+	// must make them match.
+	_ = os.WriteFile(f, []byte(`
+servers:
+  - backend: lmstudio
+    host: http://localhost:1234
+    model: nomic-ai/nomic-embed-code-GGUF
+`), 0644)
+	svc, err := NewConfigService(f, WithServerSelection("text-embedding-nomic-embed-code", ""))
+	if err != nil {
+		t.Fatalf("NewConfigService: %v", err)
+	}
+	if len(svc.Servers()) != 1 {
+		t.Fatalf("Servers() len = %d, want 1", len(svc.Servers()))
+	}
+}
+
+func TestWithServerSelection_NoMatchReturnsError(t *testing.T) {
+	clearServerEnv(t)
+	cfg := writeThreeServerYAML(t)
+	_, err := NewConfigService(cfg, WithServerSelection("no-such-model", ""))
+	if err == nil {
+		t.Fatal("expected error for no matching server")
+	}
+}
+
+func TestWithServerSelection_BackendOnlyNoMatch(t *testing.T) {
+	clearServerEnv(t)
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.yaml")
+	_ = os.WriteFile(f, []byte(`
+servers:
+  - backend: ollama
+    host: http://a:11434
+    model: ordis/jina-embeddings-v2-base-code
+`), 0644)
+	_, err := NewConfigService(f, WithServerSelection("", BackendLMStudio))
+	if err == nil {
+		t.Fatal("expected error when backend filter matches nothing")
+	}
+}
+
+func TestWithServerSelection_PreservesOrder(t *testing.T) {
+	clearServerEnv(t)
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.yaml")
+	// Three Ollama servers, all with the same model — filtering should keep
+	// all three in their original YAML order so failover still works.
+	_ = os.WriteFile(f, []byte(`
+servers:
+  - backend: ollama
+    host: http://a:11434
+    model: ordis/jina-embeddings-v2-base-code
+  - backend: lmstudio
+    host: http://b:1234
+    model: nomic-ai/nomic-embed-code-GGUF
+  - backend: ollama
+    host: http://c:11434
+    model: ordis/jina-embeddings-v2-base-code
+  - backend: ollama
+    host: http://d:11434
+    model: ordis/jina-embeddings-v2-base-code
+`), 0644)
+	svc, err := NewConfigService(f, WithServerSelection("ordis/jina-embeddings-v2-base-code", BackendOllama))
+	if err != nil {
+		t.Fatalf("NewConfigService: %v", err)
+	}
+	servers := svc.Servers()
+	if len(servers) != 3 {
+		t.Fatalf("Servers() len = %d, want 3", len(servers))
+	}
+	wantHosts := []string{"http://a:11434", "http://c:11434", "http://d:11434"}
+	for i, s := range servers {
+		if s.Host != wantHosts[i] {
+			t.Errorf("Servers()[%d].Host = %q, want %q", i, s.Host, wantHosts[i])
+		}
+	}
+}
+
+func TestWithServerSelection_EmptyArgsNoop(t *testing.T) {
+	clearServerEnv(t)
+	cfg := writeThreeServerYAML(t)
+	// Empty model and empty backend → no filter applied.
+	svc, err := NewConfigService(cfg, WithServerSelection("", ""))
+	if err != nil {
+		t.Fatalf("NewConfigService: %v", err)
+	}
+	if got := len(svc.Servers()); got != 3 {
+		t.Errorf("Servers() len = %d, want 3 (no filter should be applied)", got)
+	}
+}
