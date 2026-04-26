@@ -55,6 +55,7 @@ type Stats struct {
 	IndexedFiles  int
 	ChunksCreated int
 	FilesChanged  int
+	FilesSkipped  int
 
 	// Breakdown of changed files by category.
 	FilesAdded    int
@@ -442,7 +443,17 @@ func (idx *Indexer) indexWithTree(ctx context.Context, projectDir, oldRootHash s
 
 		chunks, err := idx.chunker.Chunk(relPath, content)
 		if err != nil {
-			return stats, fmt.Errorf("chunk %s: %w", relPath, err)
+			if idx.logger != nil {
+				idx.logger.Warn("skipping unchunkable file", "path", relPath, "error", err)
+			}
+			stats.FilesSkipped++
+			// Overwrite the sentinel hash (set above) with the real hash so this
+			// file is not retried every run. If the user later fixes the source,
+			// the hash changes and it gets re-indexed naturally.
+			if err := idx.store.UpsertFile(relPath, curTree.Files[relPath]); err != nil {
+				return stats, fmt.Errorf("upsert skipped file %s: %w", relPath, err)
+			}
+			continue
 		}
 
 		chunks = splitOversizedChunks(chunks, idx.maxChunkTokens)
@@ -496,7 +507,7 @@ func (idx *Indexer) indexWithTree(ctx context.Context, projectDir, oldRootHash s
 			fmt.Sprintf("Indexing complete: %d files, %d chunks", len(filesToIndex), totalChunks))
 	}
 
-	stats.IndexedFiles = len(filesToIndex)
+	stats.IndexedFiles = len(filesToIndex) - stats.FilesSkipped
 	stats.ChunksCreated = totalChunks
 
 	saveMeta()

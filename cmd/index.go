@@ -93,9 +93,14 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "Skipping %s: another indexer is already running.\n", repo)
 		default:
 			logger.Info("nested repo indexed", "project", repo,
-				"indexed_files", stats.IndexedFiles, "chunks_created", stats.ChunksCreated,
-				"elapsed", elapsed.String())
-			fmt.Printf("Nested repo %s: %d files, %d chunks in %s.\n", repo, stats.IndexedFiles, stats.ChunksCreated, elapsed)
+				"indexed_files", stats.IndexedFiles, "files_skipped", stats.FilesSkipped,
+				"chunks_created", stats.ChunksCreated, "elapsed", elapsed.String())
+			if stats.FilesSkipped > 0 {
+				fmt.Printf("Nested repo %s: %d files, %d chunks, skipped %d files (parse errors) in %s.\n",
+					repo, stats.IndexedFiles, stats.ChunksCreated, stats.FilesSkipped, elapsed)
+			} else {
+				fmt.Printf("Nested repo %s: %d files, %d chunks in %s.\n", repo, stats.IndexedFiles, stats.ChunksCreated, elapsed)
+			}
 		}
 	}
 
@@ -126,6 +131,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			"files_modified", stats.FilesModified,
 			"files_removed", stats.FilesRemoved,
 			"indexed_files", stats.IndexedFiles,
+			"files_skipped", stats.FilesSkipped,
 			"chunks_created", stats.ChunksCreated,
 			"old_root_hash", stats.OldRootHash,
 			"new_root_hash", stats.NewRootHash,
@@ -142,8 +148,13 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("Files: %d added, %d modified, %d removed (%d total in project)\n",
 		stats.FilesAdded, stats.FilesModified, stats.FilesRemoved, stats.TotalFiles)
-	fmt.Printf("Done. Indexed %d files, %d chunks in %s.\n",
-		stats.IndexedFiles, stats.ChunksCreated, elapsed)
+	if stats.FilesSkipped > 0 {
+		fmt.Printf("Done. Indexed %d files, %d chunks, skipped %d files (parse errors — see debug log) in %s.\n",
+			stats.IndexedFiles, stats.ChunksCreated, stats.FilesSkipped, elapsed)
+	} else {
+		fmt.Printf("Done. Indexed %d files, %d chunks in %s.\n",
+			stats.IndexedFiles, stats.ChunksCreated, elapsed)
+	}
 	return nil
 }
 

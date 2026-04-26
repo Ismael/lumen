@@ -976,6 +976,58 @@ func Secret() {}
 	}
 }
 
+func TestIndexer_SkipsUnchunkableFile(t *testing.T) {
+	dir := t.TempDir()
+	writeGoFile(t, dir, "ok.go", `package p
+
+func OK() {}
+`)
+	// Docs-style snippet: no package declaration, body at top level. go/parser
+	// rejects this as "expected declaration, found mux".
+	writeGoFile(t, dir, "broken.go", `mux := http.NewServeMux()
+mux.HandleFunc("/", handler)
+`)
+
+	emb := &mockEmbedder{dims: 4, model: "test-model"}
+	idx, err := NewIndexer(":memory:", emb, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	stats, err := idx.Index(context.Background(), dir, false, nil)
+	if err != nil {
+		t.Fatalf("expected no error when a file fails to parse, got: %v", err)
+	}
+	if stats.FilesSkipped != 1 {
+		t.Errorf("expected FilesSkipped=1, got %d", stats.FilesSkipped)
+	}
+	if stats.IndexedFiles != 1 {
+		t.Errorf("expected IndexedFiles=1 (only ok.go), got %d", stats.IndexedFiles)
+	}
+
+	results, err := idx.Search(context.Background(), dir, []float32{0.1, 0.1, 0.1, 0.1}, 10, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if strings.Contains(r.FilePath, "broken.go") {
+			t.Errorf("broken.go should not be indexed, found: %s", r.FilePath)
+		}
+	}
+
+	// Second run on unchanged files should short-circuit via root-hash match,
+	// which proves the real hash was persisted for broken.go (no sentinel left).
+	stats2, err := idx.Index(context.Background(), dir, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats2.FilesChanged != 0 || stats2.IndexedFiles != 0 {
+		t.Errorf("second run should be a no-op, got FilesChanged=%d IndexedFiles=%d",
+			stats2.FilesChanged, stats2.IndexedFiles)
+	}
+}
+
 func writeGoFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
