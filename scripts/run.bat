@@ -25,6 +25,11 @@ set "BINARY=%PLUGIN_ROOT%\bin\lumen-windows-%ARCH%.exe"
 :: Download on first run if binary is missing
 if not exist "%BINARY%" (
   set "REPO=ory/lumen"
+  if defined LUMEN_DOWNLOAD_BASE_URL (
+    set "DOWNLOAD_BASE_URL=!LUMEN_DOWNLOAD_BASE_URL!"
+  ) else (
+    set "DOWNLOAD_BASE_URL=https://github.com"
+  )
 
   :: Always use the version pinned in the manifest — keeps plugin and binary in sync
   set "MANIFEST=%PLUGIN_ROOT%\.release-please-manifest.json"
@@ -47,7 +52,7 @@ if not exist "%BINARY%" (
   )
 
   set "ASSET=lumen-!VERSION:~1!-windows-!ARCH!.exe"
-  set "URL=https://github.com/!REPO!/releases/download/!VERSION!/!ASSET!"
+  set "URL=!DOWNLOAD_BASE_URL!/!REPO!/releases/download/!VERSION!/!ASSET!"
 
   echo Downloading lumen !VERSION! for windows/!ARCH!... >&2
   if not exist "%PLUGIN_ROOT%\bin" mkdir "%PLUGIN_ROOT%\bin"
@@ -86,7 +91,7 @@ if not exist "%BINARY%" (
     echo Falling back to !LATEST_TAG!... >&2
     set "VERSION=!LATEST_TAG!"
     set "ASSET=lumen-!VERSION:~1!-windows-!ARCH!.exe"
-    set "URL=https://github.com/!REPO!/releases/download/!VERSION!/!ASSET!"
+    set "URL=!DOWNLOAD_BASE_URL!/!REPO!/releases/download/!VERSION!/!ASSET!"
 
     call curl -sfL --max-time 300 --retry 3 --retry-delay 2 "!URL!" -o "%BINARY%"
     if errorlevel 1 (

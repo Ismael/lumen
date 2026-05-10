@@ -165,7 +165,53 @@ jobs:
         shell: cmd
         run: call scripts\test_run_cmd_windows.bat
 
-      - name: Windows launcher MCP handshake (run.bat stdio)
+  launcher-e2e:
+    name: Launcher E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.actor != 'release-please[bot]'
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: ccache (Unix)
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-launcher-e2e
+          max-size: 500M
+
+      # sqlite-vec-go-bindings requires sqlite3.h at cgo compile time. The
+      # mingw toolchain on windows-latest ships without it (release builds
+      # cross-compile from Linux and copy the header in via .goreleaser.yml).
+      # Fetch the SQLite amalgamation header and expose it via CGO_CFLAGS.
+      - name: Provide sqlite3.h (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: pwsh -File scripts/test_run_windows.ps1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://www.sqlite.org/2024/sqlite-amalgamation-3470000.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'sqlite-amalgamation.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP -Force
+          $hdr = Get-ChildItem -Path $env:RUNNER_TEMP -Recurse -Filter sqlite3.h |
+                 Select-Object -First 1
+          if (-not $hdr) { throw 'sqlite3.h not found in amalgamation' }
+          "CGO_CFLAGS=-I$($hdr.DirectoryName)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "sqlite3.h at $($hdr.FullName)"
+
+      - name: Run launcher e2e
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          go test -tags=fts5,launcher_e2e -timeout=20m -v ./tests/launcher/...
