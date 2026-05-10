@@ -30,7 +30,6 @@ if [ -z "$BINARY" ]; then
   BINARY="${PLUGIN_ROOT}/bin/lumen-${OS}-${ARCH}"
 
   REPO="ory/lumen"
-  DOWNLOAD_BASE_URL="${LUMEN_DOWNLOAD_BASE_URL:-https://github.com}"
 
   # Always use the version pinned in the manifest — keeps plugin and binary in sync
   MANIFEST="${PLUGIN_ROOT}/.release-please-manifest.json"
@@ -45,7 +44,7 @@ if [ -z "$BINARY" ]; then
   fi
 
   ASSET="lumen-${VERSION#v}-${OS}-${ARCH}"
-  URL="${DOWNLOAD_BASE_URL}/${REPO}/releases/download/${VERSION}/${ASSET}"
+  URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
 
   echo "Downloading lumen ${VERSION} for ${OS}/${ARCH}..." >&2
   mkdir -p "$(dirname "$BINARY")"
@@ -72,7 +71,7 @@ if [ -z "$BINARY" ]; then
     echo "Falling back to ${LATEST_TAG}..." >&2
     VERSION="$LATEST_TAG"
     ASSET="lumen-${VERSION#v}-${OS}-${ARCH}"
-    URL="${DOWNLOAD_BASE_URL}/${REPO}/releases/download/${VERSION}/${ASSET}"
+    URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
 
     curl -fL --progress-bar --max-time 300 --retry 3 --retry-delay 2 "$URL" -o "$BINARY"
   fi
