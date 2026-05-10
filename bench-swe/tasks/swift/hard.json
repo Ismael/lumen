@@ -1,0 +1,20 @@
+{
+  "id": "swift-hard",
+  "language": "swift",
+  "repo": "https://github.com/krzysztofzablocki/Sourcery",
+  "base_commit": "d75cddb80d1795857a55933857a5b745ec7eebeb",
+  "fix_commit": "afb0782ecb5efd8c242e74183ae24c2f55d397db",
+  "issue_url": "https://github.com/krzysztofzablocki/Sourcery/pull/1453",
+  "issue_title": "Fix crash on trailing-comma generic arguments",
+  "issue_body": "## Bug description\n\nSourcery crashes with a fatal error when parsing Swift code that contains trailing commas in generic type parameters. This is valid syntax in Swift 6.2+, but causes the parser to create empty generic arguments which then crash on force-unwrap operations.\n\n## Steps to reproduce\n\n1. Create a Swift file with a generic type that has a trailing comma:\n```swift\nlet asyncTaskData: OrderedDictionary<\n    String,\n    (status: Result<Int, Error>, messages: [String]),\n>\n```\n\n2. Run Sourcery on this file\n3. Observe crash: `Fatal error: Unexpectedly found nil while unwrapping an Optional value`\n\n## Expected behavior\n\nSourcery should handle trailing commas in generic arguments gracefully and not crash. Empty generic parameters created by trailing commas should be filtered out during parsing.\n\n## Environment\n\n- Valid Swift 6.2+ syntax\n- Affects both SwiftSyntax-based and string-based parsing paths",
+  "gold_patch_file": "patches/swift-hard.patch",
+  "expected_files": [
+    "SourceryFramework/Sources/Parsing/String+TypeInference.swift",
+    "SourceryFramework/Sources/Parsing/SwiftSyntax/AST/GenericType+SwiftSyntax.swift",
+    "SourceryRuntime/Sources/Common/Composer/ParserResultsComposed.swift",
+    "SourceryTests/Parsing/ComposerSpec.swift"
+  ],
+  "setup_commands": ["swift package resolve"],
+  "test_command": "swift test --filter ComposerSpec",
+  "timeout_s": 900
+}
