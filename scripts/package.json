@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "name": "lumen-script-tests",
+  "description": "Test-only fixtures for spawn-semantics regression guard. Not published.",
+  "scripts": {
+    "test:spawn": "node test_run_spawn.js"
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.6"
+  }
+}

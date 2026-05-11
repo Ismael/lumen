@@ -26,3 +26,7 @@ bench-swe/overview.txt
 **/.claude/worktrees
 **/.claire
 .worktrees
+
+# scripts/ test-only npm install (cross-spawn for spawn-semantics test)
+scripts/node_modules/
+scripts/package-lock.json

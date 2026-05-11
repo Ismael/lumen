@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for run.sh URL construction and OS/arch detection logic.
+# Tests for run URL construction and OS/arch detection logic.
 # Runs entirely offline — no real HTTP calls are made.
 set -euo pipefail
 
@@ -29,7 +29,7 @@ assert_eq() {
 
 # ---------------------------------------------------------------------------
 # asset_name <version_tag> <os> <arch>
-# Mirrors the logic in run.sh: strip leading 'v', build asset filename.
+# Mirrors the logic in run: strip leading 'v', build asset filename.
 # ---------------------------------------------------------------------------
 asset_name() {
   local version="$1" os="$2" arch="$3"
@@ -49,7 +49,7 @@ download_url() {
 }
 
 # ---------------------------------------------------------------------------
-# arch normalisation (mirrors run.sh case statement)
+# arch normalisation (mirrors run case statement)
 # ---------------------------------------------------------------------------
 normalise_arch() {
   case "$1" in
@@ -159,7 +159,7 @@ assert_eq "pre-release version preserved" \
 echo ""
 echo "=== stdio download-on-first-run integration test ==="
 
-# Verifies that run.sh stdio downloads the binary and execs it when no binary
+# Verifies that run stdio downloads the binary and execs it when no binary
 # is present (first install). curl is stubbed in PATH — no real network calls.
 (
   _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -190,23 +190,23 @@ FAKECURL
 
   EXIT_CODE=0
   CLAUDE_PLUGIN_ROOT="${_TMPROOT}" PATH="${_FAKE_CURL_DIR}:${PATH}" \
-    bash "${_SCRIPT_DIR}/run.sh" stdio >/dev/null 2>&1 || EXIT_CODE=$?
+    bash "${_SCRIPT_DIR}/run" stdio >/dev/null 2>&1 || EXIT_CODE=$?
 
   if [ "$EXIT_CODE" -ne 0 ]; then
-    echo "  FAIL: run.sh stdio with missing binary should download and exec (exit $EXIT_CODE)"
+    echo "  FAIL: run stdio with missing binary should download and exec (exit $EXIT_CODE)"
     exit 1
   fi
   if [ ! -x "$_EXPECTED_BINARY" ]; then
-    echo "  FAIL: run.sh stdio should have downloaded binary to ${_EXPECTED_BINARY}"
+    echo "  FAIL: run stdio should have downloaded binary to ${_EXPECTED_BINARY}"
     exit 1
   fi
-  echo "  PASS: run.sh stdio downloads binary and execs it on first install"
+  echo "  PASS: run stdio downloads binary and execs it on first install"
 ) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
 
 echo ""
 echo "=== GitHub API tag parsing tests ==="
 
-# Simulates the sed command used in run.sh to extract tag_name from JSON
+# Simulates the sed command used in run to extract tag_name from JSON
 parse_tag_from_json() {
   echo "$1" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
@@ -261,7 +261,7 @@ assert_eq "fallback URL for windows amd64" \
 echo ""
 echo "=== tag validation tests ==="
 
-# Mirrors the validation in run.sh: tag must be non-empty and match ^v[0-9]
+# Mirrors the validation in run: tag must be non-empty and match ^v[0-9]
 validate_tag() {
   local tag="$1"
   if [ -z "$tag" ] || ! echo "$tag" | grep -qE '^v[0-9]'; then
@@ -281,7 +281,7 @@ echo ""
 echo "=== stdio first-install MCP handshake test ==="
 
 # End-to-end guard against the bug in #125: when the binary is missing and
-# run.sh is invoked as `run.sh stdio` (how Claude Code starts the MCP server
+# run is invoked as `run stdio` (how Claude Code starts the MCP server
 # on first install), the launcher must download the binary AND the resulting
 # process must speak MCP over stdio. If the stdio path fast-exits before
 # reaching the download, or the downloaded artefact is never actually exec'd
@@ -344,17 +344,17 @@ FAKECURL
     CLAUDE_PLUGIN_ROOT="${_TMPROOT}" \
     PATH="${_FAKE_CURL_DIR}:${PATH}" \
     LUMEN_MOCK_BINARY="${_MOCK_BIN}" \
-    bash "${_SCRIPT_DIR}/run.sh" stdio >"${_STDOUT}" 2>"${_STDERR}" \
+    bash "${_SCRIPT_DIR}/run" stdio >"${_STDOUT}" 2>"${_STDERR}" \
     || EXIT_CODE=$?
 
   if [ "$EXIT_CODE" -ne 0 ]; then
-    echo "  FAIL: run.sh stdio exited $EXIT_CODE — MCP server would be dead for the session"
+    echo "  FAIL: run stdio exited $EXIT_CODE — MCP server would be dead for the session"
     echo "        stderr:"
     sed 's/^/          /' "${_STDERR}"
     exit 1
   fi
   if [ ! -x "$_EXPECTED_BINARY" ]; then
-    echo "  FAIL: run.sh stdio did not place artefact at ${_EXPECTED_BINARY}"
+    echo "  FAIL: run stdio did not place artefact at ${_EXPECTED_BINARY}"
     exit 1
   fi
   if ! grep -q '"jsonrpc":"2.0"' "${_STDOUT}"; then
@@ -369,7 +369,7 @@ FAKECURL
     sed 's/^/          /' "${_STDOUT}"
     exit 1
   fi
-  echo "  PASS: run.sh stdio downloads, execs, and brokers MCP initialize on first install"
+  echo "  PASS: run stdio downloads, execs, and brokers MCP initialize on first install"
 ) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
 
 echo ""

@@ -24,7 +24,7 @@ server.
 
 3. Register the MCP server:
    ```bash
-   codex mcp add lumen -- "$CODEX_HOME/lumen/scripts/run.sh" stdio
+   codex mcp add lumen -- "$CODEX_HOME/lumen/scripts/run" stdio
    ```
 
 4. Restart Codex.

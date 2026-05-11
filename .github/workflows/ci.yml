@@ -156,16 +156,26 @@ jobs:
 
       - name: Unix script tests
         if: runner.os != 'Windows'
-        run: |
-          bash scripts/test_run.sh
-          bash scripts/test_run_cmd.sh
+        run: bash scripts/test_run.sh
 
-      - name: Windows script tests (run.cmd delegation)
+      - name: Windows dispatch test (cmd /c PATHEXT + clean stdout)
         if: runner.os == 'Windows'
         shell: cmd
-        run: call scripts\test_run_cmd_windows.bat
+        run: call scripts\test_run_dispatch_windows.bat
 
-      - name: Windows launcher MCP handshake (run.bat stdio)
+      - name: Windows launcher MCP handshake (run.cmd stdio)
         if: runner.os == 'Windows'
         shell: pwsh
         run: pwsh -File scripts/test_run_windows.ps1
+
+      - name: Setup Node.js for spawn-semantics test
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install cross-spawn for parallel transport test
+        working-directory: scripts
+        run: npm install --no-audit --no-fund
+
+      - name: Spawn-semantics regression guard
+        run: node scripts/test_run_spawn.js

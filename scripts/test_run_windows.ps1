@@ -1,9 +1,9 @@
 #!/usr/bin/env pwsh
-# End-to-end test for run.bat on Windows, mirroring the POSIX MCP handshake
+# End-to-end test for run.cmd on Windows, mirroring the POSIX MCP handshake
 # test in test_run.sh. Exercises the first-install code path: no binary in
 # bin/, a stub curl.bat shadows real curl via PATH, the "download" copies a
 # cross-compiled mock MCP server into place, and a real JSON-RPC initialize
-# request is piped into `run.bat stdio` with the response asserted.
+# request is piped into `run.cmd stdio` with the response asserted.
 
 $ErrorActionPreference = 'Stop'
 
@@ -13,7 +13,7 @@ $FAIL = 0
 function Pass($msg) { Write-Host "  PASS: $msg"; $script:PASS++ }
 function Fail($msg) { Write-Host "  FAIL: $msg"; $script:FAIL++ }
 
-Write-Host "=== stdio first-install MCP handshake test (run.bat) ==="
+Write-Host "=== stdio first-install MCP handshake test (run.cmd) ==="
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = (Resolve-Path (Join-Path $ScriptDir '..')).Path
@@ -74,15 +74,15 @@ exit /b 0
 '@
         [IO.File]::WriteAllText((Join-Path $FakeCurlDir 'curl.bat'), $curlStub, [Text.Encoding]::ASCII)
 
-        # Launch run.bat via System.Diagnostics.Process for reliable exit-code
+        # Launch run.cmd via System.Diagnostics.Process for reliable exit-code
         # propagation and explicit stdin/stdout/stderr wiring. Start-Process
         # with -RedirectStandardInput is unreliable here.
-        $runBat  = Join-Path $ScriptDir 'run.bat'
+        $runCmd  = Join-Path $ScriptDir 'run.cmd'
         $initReq = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"launcher-e2e","version":"1.0"}}}'
 
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = 'cmd.exe'
-        $psi.Arguments = "/c `"$runBat`" stdio"
+        $psi.Arguments = "/c `"$runCmd`" stdio"
         $psi.UseShellExecute = $false
         $psi.RedirectStandardInput  = $true
         $psi.RedirectStandardOutput = $true
@@ -95,7 +95,7 @@ exit /b 0
 
         $proc = [System.Diagnostics.Process]::Start($psi)
 
-        # If run.bat fast-exits in stdio mode, its stdin pipe is already
+        # If run.cmd fast-exits in stdio mode, its stdin pipe is already
         # closed by the time we try to write — that IS the #125 symptom,
         # so swallow the broken-pipe exception and let the exit-code check
         # below produce the real diagnostic.
@@ -106,7 +106,7 @@ exit /b 0
         $stderr = $proc.StandardError.ReadToEnd()
         if (-not $proc.WaitForExit(60000)) {
             $proc.Kill()
-            Fail "run.bat stdio did not exit within 60s"
+            Fail "run.cmd stdio did not exit within 60s"
         } else {
             $exitCode = $proc.ExitCode
 
@@ -117,19 +117,19 @@ exit /b 0
             }
 
             if ($exitCode -ne 0) {
-                Fail "run.bat stdio exited $exitCode — MCP server would be dead for the session"
+                Fail "run.cmd stdio exited $exitCode — MCP server would be dead for the session"
             } elseif (-not (Test-Path $expectedBinary)) {
-                Fail "run.bat stdio did not place artefact at $expectedBinary"
+                Fail "run.cmd stdio did not place artefact at $expectedBinary"
             } elseif ($stdout -notmatch '"jsonrpc":"2\.0"') {
                 Fail "MCP initialize produced no JSON-RPC 2.0 response on stdout"
                 Write-Host "        stdout:"
                 ($stdout -split "`r?`n") | ForEach-Object { Write-Host "          $_" }
             } elseif ($stdout -notmatch '"name":"mock-lumen"') {
-                Fail "MCP response did not come from the exec'd mock — run.bat may be swallowing stdout"
+                Fail "MCP response did not come from the exec'd mock — run.cmd may be swallowing stdout"
                 Write-Host "        stdout:"
                 ($stdout -split "`r?`n") | ForEach-Object { Write-Host "          $_" }
             } else {
-                Pass "run.bat stdio downloads, execs, and brokers MCP initialize on first install"
+                Pass "run.cmd stdio downloads, execs, and brokers MCP initialize on first install"
             }
         }
     }

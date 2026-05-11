@@ -1,2 +1,9 @@
 bench-results linguist-generated
 docs/plans linguist-generated
+
+# Windows batch files require CRLF line endings — the cmd.exe parser
+# has 512-byte boundary bugs with bare-LF files (GOTO/CALL label
+# parsing). Pin .bat/.cmd to CRLF regardless of the user's
+# core.autocrlf setting.
+*.bat text eol=crlf
+*.cmd text eol=crlf

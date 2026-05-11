@@ -18,7 +18,8 @@ Add Lumen to the `plugin` array in your `opencode.json`:
 ```
 
 Restart OpenCode. The plugin registers a local `mcp.lumen` server that runs
-`scripts/run.cmd stdio` on all platforms.
+`scripts/run stdio` on all platforms (cross-spawn resolves `scripts/run.cmd`
+via PATHEXT on Windows).
 
 ## Verify
 

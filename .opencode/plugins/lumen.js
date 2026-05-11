@@ -3,7 +3,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(__dirname, "../..");
-const runCommand = path.join(pluginRoot, "scripts", "run.cmd");
+const runCommand = path.join(pluginRoot, "scripts", "run");
 
 export const LumenPlugin = async () => {
   return {
@@ -12,10 +12,7 @@ export const LumenPlugin = async () => {
       if (!config.mcp.lumen) {
         config.mcp.lumen = {
           type: "local",
-          command:
-            process.platform === "win32"
-              ? ["cmd", "/c", runCommand, "stdio"]
-              : [runCommand, "stdio"],
+          command: [runCommand, "stdio"],
           enabled: true,
         };
       }

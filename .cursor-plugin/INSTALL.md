@@ -8,7 +8,9 @@ Lumen ships a native Cursor plugin bundle in this repository.
 - `.cursor/mcp.json` - local `lumen` MCP server wiring
 - `hooks/hooks-cursor.json` - SessionStart hook
 - `skills/` - shared `doctor` and `reindex` skills
-- `scripts/run.cmd` - cross-platform launcher used by the MCP server and hooks
+- `scripts/run` (POSIX) and `scripts/run.cmd` (Windows) - launcher pair used
+  by the MCP server and hooks. Configs reference the extensionless
+  `scripts/run`; cross-spawn / cmd.exe pick `.cmd` via PATHEXT on Windows.
 
 ## Installation
 
