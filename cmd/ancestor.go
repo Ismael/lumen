@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 
 	"github.com/ory/lumen/internal/config"
+	"github.com/ory/lumen/internal/merkle"
 )
 
 // findAncestorIndex walks up from path's parent directory, checking whether
@@ -34,7 +35,8 @@ import (
 func findAncestorIndex(path, model string) string {
 	candidate := filepath.Dir(path)
 	for {
-		if !pathCrossesSkipDir(candidate, path) {
+		unindexable, _ := merkle.IsRootUnindexable(candidate)
+		if !pathCrossesSkipDir(candidate, path) && !unindexable {
 			if _, err := os.Stat(config.DBPathForProject(candidate, model)); err == nil {
 				return candidate
 			}

@@ -29,6 +29,7 @@ import (
 	"github.com/ory/lumen/internal/git"
 	"github.com/ory/lumen/internal/index"
 	"github.com/ory/lumen/internal/indexlock"
+	"github.com/ory/lumen/internal/merkle"
 	"github.com/ory/lumen/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -48,6 +49,20 @@ var indexCmd = &cobra.Command{
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
+	projectPath, err := filepath.Abs(args[0])
+	if err != nil {
+		return fmt.Errorf("resolve path: %w", err)
+	}
+
+	// Refuse roots that have declared themselves un-indexable — either via a
+	// .lumenignore catch-all (e.g. $HOME with `**`) or via the hardcoded
+	// refusal list. Without this, the indexer would walk the entire tree,
+	// ignore every file, produce an empty index, and on macOS trigger TCC
+	// prompts for protected folders along the way.
+	if unindexable, reason := merkle.IsRootUnindexable(projectPath); unindexable {
+		return fmt.Errorf("refusing to index %s: %s", projectPath, reason)
+	}
+
 	logger, logFile := newDebugLogger()
 	if logFile != nil {
 		defer func() { _ = logFile.Close() }()
@@ -61,11 +76,6 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	emb := newEmbedder(cfg)
 	emb.SetLogger(logger)
 
-	projectPath, err := filepath.Abs(args[0])
-	if err != nil {
-		return fmt.Errorf("resolve path: %w", err)
-	}
-
 	modelName := emb.ModelName()
 
 	// Normalize to the git repository root when inside a git repo so that
@@ -75,6 +85,14 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		projectPath = root
 	} else if ancestor := findAncestorIndex(projectPath, modelName); ancestor != "" {
 		projectPath = ancestor
+	}
+
+	// Re-check after normalization: git.RepoRoot can resolve upward to an
+	// un-indexable root (e.g. a git repo rooted at $HOME) and bypass the
+	// pre-normalization guard. findAncestorIndex already filters, but the git
+	// path does not.
+	if unindexable, reason := merkle.IsRootUnindexable(projectPath); unindexable {
+		return fmt.Errorf("refusing to index %s: %s", projectPath, reason)
 	}
 
 	// When the project directory is not a git repo, discover nested git repos

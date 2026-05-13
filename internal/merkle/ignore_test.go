@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -81,6 +82,143 @@ func TestMakeSkip_NegationPattern(t *testing.T) {
 	if skip("main.go", false) {
 		t.Error("expected main.go to pass")
 	}
+}
+
+func TestIsRootUnindexable(t *testing.T) {
+	// .lumenignore-based scenarios: each case writes the given contents (or no
+	// file when ignoreContents is the sentinel "<no file>") to a temp dir.
+	const noFile = "<no file>"
+	lumenIgnoreCases := []struct {
+		name           string
+		ignoreContents string
+		want           bool
+		wantReason     string
+	}{
+		{"no .lumenignore", noFile, false, ""},
+		{"empty .lumenignore", "", false, ""},
+		{"specific patterns", "node_modules/\n*.log\nbuild/\n", false, ""},
+		{"doublestar matches everything", "**\n", true, ".lumenignore catch-all pattern"},
+		{"doublestar-slash-star matches everything", "**/*\n", true, ".lumenignore catch-all pattern"},
+		// The user's actual $HOME case — multiple broad patterns combined.
+		{"combined catch-all patterns", "*\n**/**\n*/*\n**/*\n", true, ".lumenignore catch-all pattern"},
+		// In gitignore semantics, a bare `*` (no `/`) matches any name at any
+		// depth — so it ignores every file in the tree. That is a catch-all.
+		{"single-star alone", "*\n", true, ".lumenignore catch-all pattern"},
+		{"comments and blank lines do not trigger", "# comment\n\n  \n", false, ""},
+	}
+	for _, tc := range lumenIgnoreCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.ignoreContents != noFile {
+				writeFile(t, dir, ".lumenignore", tc.ignoreContents)
+			}
+			got, reason := IsRootUnindexable(dir)
+			if got != tc.want {
+				t.Errorf("IsRootUnindexable() = %v, want %v", got, tc.want)
+			}
+			if reason != tc.wantReason {
+				t.Errorf("reason = %q, want %q", reason, tc.wantReason)
+			}
+		})
+	}
+
+	t.Run("hardcoded system paths are refused", func(t *testing.T) {
+		// These paths should always be refused as index roots, regardless of
+		// whether a .lumenignore exists. Indexing them is never the user's
+		// intent and on macOS would trigger TCC prompts.
+		//
+		// The list is platform-aware: Unix paths only assert refusal when the
+		// path exists on disk (so /Applications and /Library don't fail on
+		// Linux), and Windows paths only run on Windows.
+		unixPaths := []string{
+			"/",
+			"/Users",
+			"/home",
+			"/tmp",
+			"/private/tmp",
+			"/var",
+			"/private/var",
+			"/etc",
+			"/usr",
+			"/opt",
+			"/Applications",
+			"/Library",
+			"/System",
+		}
+		windowsPaths := []string{
+			`C:\`,
+			`C:\Windows`,
+			`C:\Program Files`,
+			`C:\Program Files (x86)`,
+			`C:\Users`,
+			`C:\ProgramData`,
+		}
+		var paths []string
+		if runtime.GOOS == "windows" {
+			paths = windowsPaths
+		} else {
+			paths = unixPaths
+		}
+		for _, p := range paths {
+			if _, err := os.Stat(p); err != nil {
+				// Skip paths that don't exist on this host — EvalSymlinks
+				// will fail there and the fallback to filepath.Clean still
+				// catches them, but we keep the assertion focused on real
+				// roots that users could actually point lumen at.
+				continue
+			}
+			got, reason := IsRootUnindexable(p)
+			if !got {
+				t.Errorf("expected %q to be refused as an index root", p)
+			}
+			if reason != "hardcoded system root" {
+				t.Errorf("reason for %q = %q, want %q", p, reason, "hardcoded system root")
+			}
+		}
+	})
+
+	t.Run("symlink to home is refused", func(t *testing.T) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("no home dir available")
+		}
+		linkParent := t.TempDir()
+		link := filepath.Join(linkParent, "home-symlink")
+		if err := os.Symlink(home, link); err != nil {
+			t.Skipf("symlinks unsupported on this platform: %v", err)
+		}
+		got, reason := IsRootUnindexable(link)
+		if !got {
+			t.Errorf("expected %q (symlink to home) to be refused", link)
+		}
+		if reason != "user home directory" {
+			t.Errorf("reason = %q, want %q", reason, "user home directory")
+		}
+	})
+
+	t.Run("home directory is refused", func(t *testing.T) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("no home dir available")
+		}
+		got, reason := IsRootUnindexable(home)
+		if !got {
+			t.Errorf("expected %q (home) to be refused as an index root", home)
+		}
+		if reason != "user home directory" {
+			t.Errorf("reason = %q, want %q", reason, "user home directory")
+		}
+	})
+
+	t.Run("hardcoded refusal does not falsely flag siblings of home", func(t *testing.T) {
+		// A directory that is NOT in the refusal list and has no .lumenignore
+		// must still be indexable. Use the test's tempdir which is outside any
+		// hardcoded path.
+		dir := t.TempDir()
+		if got, _ := IsRootUnindexable(dir); got {
+			t.Errorf("expected %q to be indexable (no .lumenignore, not hardcoded)", dir)
+		}
+	})
 }
 
 func TestMakeSkip_HardcodedFiles(t *testing.T) {

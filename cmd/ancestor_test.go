@@ -86,6 +86,35 @@ func TestFindAncestorIndex(t *testing.T) {
 		}
 	})
 
+	t.Run("skips ancestor whose .lumenignore declares it un-indexable", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Setenv("XDG_DATA_HOME", tmpDir)
+
+		// Create a real on-disk ancestor with an existing DB AND a catch-all
+		// .lumenignore. This mirrors the user's $HOME case: walking up from
+		// a non-git subdirectory must NOT resolve to a path that the user has
+		// declared un-indexable.
+		ancestor := filepath.Join(tmpDir, "home")
+		if err := os.MkdirAll(ancestor, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ancestor, ".lumenignore"), []byte("**\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dbPath := config.DBPathForProject(ancestor, model)
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dbPath, []byte{}, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		got := findAncestorIndex(filepath.Join(ancestor, "sub", "deep"), model)
+		if got != "" {
+			t.Fatalf("expected empty (ancestor declared un-indexable), got %q", got)
+		}
+	})
+
 	t.Run("returns nearest ancestor when multiple exist", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		t.Setenv("XDG_DATA_HOME", tmpDir)
