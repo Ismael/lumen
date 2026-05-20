@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.41](https://github.com/ory/lumen/compare/v0.0.40...v0.0.41) (2026-05-20)
+
+
+### Bug Fixes
+
+* **stdio:** bound embedQuery and fast-fail during background reindex ([#165](https://github.com/ory/lumen/issues/165)) ([d7782cf](https://github.com/ory/lumen/commit/d7782cf113a09fd48a01ad771f26780d436895ea))
+* **stdio:** short-circuit semantic_search when index is being rebuilt ([#163](https://github.com/ory/lumen/issues/163)) ([89555d0](https://github.com/ory/lumen/commit/89555d07e2c630f010d778da3cbf7fe87f1d5eed))
+
 ## [0.0.40](https://github.com/ory/lumen/compare/v0.0.39...v0.0.40) (2026-05-13)
 
 
