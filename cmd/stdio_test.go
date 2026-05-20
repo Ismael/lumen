@@ -2029,3 +2029,20 @@ func TestIndexerCache_CloseCancelsBackgroundGoroutines(t *testing.T) {
 		t.Fatalf("expected context.Canceled in ensureFresh, got: %v", finalErr)
 	}
 }
+
+// TestStaleIndexWarning_NoBrittleToolCallCount locks in the wording change
+// that drops the brittle "10 tool calls" advice. Initial indexing of large
+// repos (e.g. cloud) takes 10+ minutes — far more than 10 tool calls — so
+// the old text was misleading. The "Index is being updated in the
+// background" prefix is preserved so callers that match on it still work.
+func TestStaleIndexWarning_NoBrittleToolCallCount(t *testing.T) {
+	if strings.Contains(staleIndexWarning, "10 tool calls") {
+		t.Fatal("staleIndexWarning still references the brittle '10 tool calls' count; large repos exceed that during initial indexing")
+	}
+	if !strings.Contains(staleIndexWarning, "Index is being updated in the background") {
+		t.Fatal("staleIndexWarning must keep the 'Index is being updated in the background' prefix for callers that match on it")
+	}
+	if !strings.Contains(staleIndexWarning, "grep") {
+		t.Fatal("staleIndexWarning should point the LLM at concrete fallback tools (grep/glob/find)")
+	}
+}

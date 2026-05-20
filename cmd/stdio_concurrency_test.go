@@ -419,10 +419,11 @@ func Demo() {}
 		cache: map[string]cacheEntry{
 			projectDir: {idx: idx, effectiveRoot: projectDir, model: blockEmb.ModelName()},
 		},
-		embedder:     blockEmb,
-		cfg:          newTestConfigService(t, 512),
-		log:          discardLog,
-		freshnessTTL: 1 * time.Nanosecond, // force the merkle/flock path; do not trust LastIndexedAt
+		embedder:          blockEmb,
+		cfg:               newTestConfigService(t, 512),
+		log:               discardLog,
+		freshnessTTL:      1 * time.Nanosecond,    // force the merkle/flock path; do not trust LastIndexedAt
+		staleEmbedTimeout: 200 * time.Millisecond, // tight bound so fast-fail completes quickly in the test
 	}
 
 	// Step 4: call handleSemanticSearch with a deadline that's much shorter
@@ -457,8 +458,12 @@ func Demo() {}
 		if out.err != nil {
 			t.Fatalf("handleSemanticSearch returned error: %v (elapsed %v)", out.err, elapsed)
 		}
+		// With the fast-fail design we DO attempt the embed but bound it
+		// tightly (~3s by default; the test overrides to 200ms). On timeout
+		// the handler returns warning-only — the embed was attempted but
+		// did not extend the call time meaningfully.
 		if elapsed > 1*time.Second {
-			t.Fatalf("handleSemanticSearch took %v — expected sub-second short-circuit when StaleWarning is set", elapsed)
+			t.Fatalf("handleSemanticSearch took %v — expected fast-fail within staleEmbedTimeout", elapsed)
 		}
 		text := mustTextResult(t, out.result)
 		if !strings.Contains(text, "Index is being updated in the background") {
@@ -468,12 +473,13 @@ func Demo() {}
 		t.Fatal("handleSemanticSearch did not return within 3s — bug: embedQuery contends with background indexer even when StaleWarning is set")
 	}
 
-	// The embedder must NEVER have been called: the short-circuit must
-	// happen before embedQuery.
+	// With fast-fail, embed IS called but gets cancelled by the deadline.
+	// Assert started was signaled to confirm we attempted the embed.
 	select {
 	case <-blockEmb.started:
-		t.Fatal("embedQuery was called even though StaleWarning was set — handleSemanticSearch must short-circuit before embedding")
+		// expected — fast-fail attempted the embed before timing out
 	default:
+		t.Fatal("expected fast-fail design to attempt embed (started signal) before timing out")
 	}
 }
 
@@ -486,5 +492,174 @@ func writeTestGoFile(t *testing.T, dir, name, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestHandleSemanticSearch_EmbedQueryBounded verifies defense-in-depth: even
+// when no StaleWarning is set (no concurrent indexer), a slow embedder must
+// not be able to hang the MCP call past defaultEmbedTimeout. The underlying
+// http.Client timeout is 10 minutes, which is effectively a hang from
+// Claude Code's perspective.
+func TestHandleSemanticSearch_EmbedQueryBounded(t *testing.T) {
+	const dims = 4
+
+	rawDir := t.TempDir()
+	projectDir, err := filepath.EvalSymlinks(rawDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestGoFile(t, projectDir, "main.go", `package main
+
+func Demo() {}
+`)
+
+	fastEmb := &stubEmbedder{model: "blocking-stub"}
+	dbPath := config.DBPathForProject(projectDir, fastEmb.ModelName())
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(dbPath)) })
+
+	idx, err := index.NewIndexer(dbPath, fastEmb, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idx.Index(context.Background(), projectDir, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	_ = idx.Close()
+
+	// Re-open with a blocking embedder. No flock held — so StaleWarning will
+	// be empty and the short-circuit / fast-fail path does NOT trigger; this
+	// exercises the pure defense-in-depth bound.
+	blockEmb := newBlockingStubEmbedder(dims)
+	idx, err = index.NewIndexer(dbPath, blockEmb, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		blockEmb.Unblock()
+		_ = idx.Close()
+	}()
+
+	ic := &indexerCache{
+		cache: map[string]cacheEntry{
+			projectDir: {idx: idx, effectiveRoot: projectDir, model: blockEmb.ModelName(), lastCheckedAt: time.Now()},
+		},
+		embedder:     blockEmb,
+		cfg:          newTestConfigService(t, 512),
+		log:          discardLog,
+		freshnessTTL: 1 * time.Hour,          // skip merkle path so StaleWarning stays empty
+		embedTimeout: 500 * time.Millisecond, // tight bound so the test exercises the limit in <1s
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{}}
+	_, _, callErr := ic.handleSemanticSearch(ctx, req, SemanticSearchInput{
+		Cwd:   projectDir,
+		Path:  projectDir,
+		Query: "demo",
+		Limit: 3,
+	})
+	elapsed := time.Since(start)
+
+	if callErr == nil {
+		t.Fatalf("expected timeout error, got nil (elapsed %v)", elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("handleSemanticSearch took %v — expected ~embedTimeout (500ms), not the 10-minute HTTP timeout", elapsed)
+	}
+	if !strings.Contains(callErr.Error(), "embed query") {
+		t.Fatalf("expected 'embed query' in error, got: %v", callErr)
+	}
+}
+
+// TestHandleSemanticSearch_StaleWarningFastEmbedReturnsStaleResults verifies
+// that when StaleWarning is set but the embedder responds within the short
+// deadline, we still return the (stale) results from the existing DB along
+// with the warning — strictly better UX than warning-only.
+func TestHandleSemanticSearch_StaleWarningFastEmbedReturnsStaleResults(t *testing.T) {
+	rawDir := t.TempDir()
+	projectDir, err := filepath.EvalSymlinks(rawDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestGoFile(t, projectDir, "main.go", `package main
+
+// FindMe is the function the test searches for.
+func FindMe() {}
+`)
+
+	fastEmb := &stubEmbedder{model: "fast-stub"}
+	dbPath := config.DBPathForProject(projectDir, fastEmb.ModelName())
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(dbPath)) })
+
+	idx, err := index.NewIndexer(dbPath, fastEmb, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idx.Index(context.Background(), projectDir, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	_ = idx.Close()
+
+	// Hold the flock externally so ensureIndexed sets StaleWarning.
+	lockPath := indexlock.LockPathForDB(dbPath)
+	lk, lockErr := indexlock.TryAcquire(lockPath)
+	if lockErr != nil {
+		t.Fatal(lockErr)
+	}
+	if lk == nil {
+		t.Fatal("expected to acquire indexlock for test setup")
+	}
+	defer lk.Release()
+	if !indexlock.IsHeld(lockPath) {
+		t.Skip("flock TryAcquire+IsHeld is reentrant in the same process on this OS")
+	}
+
+	// Re-open with the SAME fast embedder — embed will succeed within the
+	// short stale deadline, so handleSemanticSearch should return the
+	// (stale) results from the existing DB.
+	idx, err = index.NewIndexer(dbPath, fastEmb, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	ic := &indexerCache{
+		cache: map[string]cacheEntry{
+			projectDir: {idx: idx, effectiveRoot: projectDir, model: fastEmb.ModelName()},
+		},
+		embedder:     fastEmb,
+		cfg:          newTestConfigService(t, 512),
+		log:          discardLog,
+		freshnessTTL: 1 * time.Nanosecond,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{}}
+	result, _, callErr := ic.handleSemanticSearch(ctx, req, SemanticSearchInput{
+		Cwd:   projectDir,
+		Path:  projectDir,
+		Query: "FindMe",
+		Limit: 3,
+	})
+	if callErr != nil {
+		t.Fatalf("handleSemanticSearch returned error: %v", callErr)
+	}
+	text := mustTextResult(t, result)
+	if !strings.Contains(text, "Index is being updated in the background") {
+		t.Fatalf("expected StaleWarning text in result, got:\n%s", text)
+	}
+	if !strings.Contains(text, "FindMe") {
+		t.Fatalf("expected stale-but-real search results to include 'FindMe' from the pre-indexed file, got:\n%s", text)
 	}
 }
