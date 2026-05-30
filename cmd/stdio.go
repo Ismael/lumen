@@ -527,12 +527,17 @@ func (ic *indexerCache) getOrCreate(projectPath string, preferredRoot string, mo
 		lk, lockErr := indexlock.TryAcquire(lockPath)
 		switch {
 		case lockErr == nil && lk != nil:
-			// We own creation. Re-check under the lock — a peer may have created
-			// the DB between our stat above and acquiring the lock.
-			if _, st := os.Stat(dbPath); os.IsNotExist(st) {
-				seedWarning = ic.seedFromDonor(effectiveRoot, modelName, dbPath)
-			}
-			lk.Release()
+			// We own creation. Defer release so the lock is freed even if
+			// seedFromDonor panics; the IIFE keeps it scoped to the seed block
+			// rather than the whole function.
+			func() {
+				defer lk.Release()
+				// Re-check under the lock — a peer may have created the DB
+				// between our stat above and acquiring the lock.
+				if _, st := os.Stat(dbPath); os.IsNotExist(st) {
+					seedWarning = ic.seedFromDonor(effectiveRoot, modelName, dbPath)
+				}
+			}()
 		default:
 			// A background indexer holds the lock and is creating + seeding the
 			// DB. Wait briefly for it to publish the file so NewIndexer opens
