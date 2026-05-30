@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ory/lumen/internal/config"
 	"github.com/ory/lumen/internal/embedder"
@@ -30,12 +31,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// serverStatus is the reachability outcome for a single configured embedding
+// server.
+type serverStatus struct {
+	server    config.ServerConfig
+	reachable bool
+	message   string
+}
+
 // statusResult is the combined outcome of the two status checks: embedding
-// service reachability and index presence/freshness.
+// service reachability (one entry per configured server) and index
+// presence/freshness.
 type statusResult struct {
-	server           config.ServerConfig
-	serviceReachable bool
-	serviceMessage   string
+	servers []serverStatus
 
 	projectPath   string
 	indexed       bool
@@ -47,24 +55,41 @@ type statusResult struct {
 	stale         bool
 }
 
-// statusExitCode returns 0 only when the service is reachable, the index
-// exists, and the index is fresh; otherwise 1.
+// anyServerReachable reports whether at least one configured embedding server
+// responded. Lumen uses failover, so the service is usable as long as one
+// server is up.
+func anyServerReachable(r statusResult) bool {
+	for _, s := range r.servers {
+		if s.reachable {
+			return true
+		}
+	}
+	return false
+}
+
+// statusExitCode returns 0 only when at least one server is reachable, the
+// index exists, and the index is fresh; otherwise 1.
 func statusExitCode(r statusResult) int {
-	if r.serviceReachable && r.indexed && !r.stale {
+	if anyServerReachable(r) && r.indexed && !r.stale {
 		return 0
 	}
 	return 1
 }
 
-// formatStatus renders a human-readable status report combining the embedding
-// service line and the index block (or a "not indexed" line).
+// formatStatus renders a human-readable status report: one line per configured
+// embedding server, followed by the index block (or a "not indexed" line).
 func formatStatus(r statusResult) string {
 	var b strings.Builder
 
-	if r.serviceReachable {
-		fmt.Fprintf(&b, "Embedding service: OK (%s, %s, %s)\n", r.server.Backend, r.server.Host, r.server.Model)
-	} else {
-		fmt.Fprintf(&b, "Embedding service: ERROR (%s, %s) — %s\n", r.server.Backend, r.server.Host, r.serviceMessage)
+	if len(r.servers) == 0 {
+		fmt.Fprintf(&b, "Embedding service: ERROR — no servers configured\n")
+	}
+	for _, s := range r.servers {
+		if s.reachable {
+			fmt.Fprintf(&b, "Embedding service: OK (%s, %s, %s)\n", s.server.Backend, s.server.Host, s.server.Model)
+		} else {
+			fmt.Fprintf(&b, "Embedding service: ERROR (%s, %s) — %s\n", s.server.Backend, s.server.Host, s.message)
+		}
 	}
 
 	if !r.indexed {
@@ -103,16 +128,17 @@ func init() {
 var statusCmd = &cobra.Command{
 	Use:   "status [path]",
 	Short: "Report embedding-service health and index freshness",
-	Long: `Reports whether the embedding service is reachable and whether the
-project's index exists and is fresh.
+	Long: `Reports whether the configured embedding server(s) are reachable and
+whether the project's index exists and is fresh. Every configured server is
+reported on its own line.
 
 With no argument, inspects the current directory. The path is normalized to the
 git repository root (or an existing ancestor index) so it reports on the same
 index that searches use.
 
 status performs no indexing and never creates an index database. Exit code is 0
-only when the service is reachable and the index exists and is fresh; otherwise
-1.`,
+only when at least one server is reachable and the index exists and is fresh;
+otherwise 1.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runStatus,
 }
@@ -148,14 +174,23 @@ func runStatus(cmd *cobra.Command, args []string) error {
 func collectStatus(ctx context.Context, cfg *config.ConfigService, emb *embedder.FailoverEmbedder, projectPath string) statusResult {
 	r := statusResult{projectPath: projectPath}
 
-	// Probe the primary configured server. Unlike the MCP handleHealthCheck
-	// handler, which targets the active server after failover, a one-shot CLI
-	// command has no live failover state, so servers[0] is the right choice.
+	// Probe every configured server concurrently, preserving config order in
+	// the result. The MCP handleHealthCheck handler reports only the active
+	// failover server; a one-shot CLI has no live failover state, so it reports
+	// all configured servers and treats the service as healthy when any one is
+	// reachable (matching failover behavior).
 	servers := cfg.Servers()
-	if len(servers) > 0 {
-		r.server = servers[0]
-		r.serviceReachable, r.serviceMessage = probeEmbeddingService(ctx, servers[0])
+	r.servers = make([]serverStatus, len(servers))
+	var wg sync.WaitGroup
+	for i := range servers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			reachable, message := probeEmbeddingService(ctx, servers[i])
+			r.servers[i] = serverStatus{server: servers[i], reachable: reachable, message: message}
+		}(i)
 	}
+	wg.Wait()
 
 	modelName := emb.ModelName()
 

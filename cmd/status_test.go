@@ -24,16 +24,23 @@ import (
 )
 
 func TestStatusExitCode(t *testing.T) {
+	// reach builds a single-server slice with the given reachability.
+	reach := func(ok bool) []serverStatus { return []serverStatus{{reachable: ok}} }
 	tests := []struct {
 		name string
 		r    statusResult
 		want int
 	}{
-		{"healthy and fresh", statusResult{serviceReachable: true, indexed: true, stale: false}, 0},
-		{"service unreachable", statusResult{serviceReachable: false, indexed: true, stale: false}, 1},
-		{"index missing", statusResult{serviceReachable: true, indexed: false}, 1},
-		{"index stale", statusResult{serviceReachable: true, indexed: true, stale: true}, 1},
-		{"all bad", statusResult{serviceReachable: false, indexed: false, stale: true}, 1},
+		{"healthy and fresh", statusResult{servers: reach(true), indexed: true, stale: false}, 0},
+		{"service unreachable", statusResult{servers: reach(false), indexed: true, stale: false}, 1},
+		{"index missing", statusResult{servers: reach(true), indexed: false}, 1},
+		{"index stale", statusResult{servers: reach(true), indexed: true, stale: true}, 1},
+		{"all bad", statusResult{servers: reach(false), indexed: false, stale: true}, 1},
+		// Failover semantics: at least one reachable server means the service
+		// is usable, so this is healthy.
+		{"one of two reachable", statusResult{servers: []serverStatus{{reachable: false}, {reachable: true}}, indexed: true, stale: false}, 0},
+		{"all servers unreachable", statusResult{servers: []serverStatus{{reachable: false}, {reachable: false}}, indexed: true, stale: false}, 1},
+		{"no servers configured", statusResult{servers: nil, indexed: true, stale: false}, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -45,19 +52,25 @@ func TestStatusExitCode(t *testing.T) {
 }
 
 func TestFormatStatus(t *testing.T) {
+	okServer := func() serverStatus {
+		return serverStatus{
+			server:    config.ServerConfig{Backend: "ollama", Host: "http://localhost:11434", Model: "jina"},
+			reachable: true,
+			message:   "service is healthy",
+		}
+	}
+
 	t.Run("healthy and fresh", func(t *testing.T) {
 		r := statusResult{
-			server:           config.ServerConfig{Backend: "ollama", Host: "http://localhost:11434", Model: "jina"},
-			serviceReachable: true,
-			serviceMessage:   "service is healthy",
-			projectPath:      "/repo",
-			indexed:          true,
-			totalFiles:       158,
-			indexedFiles:     158,
-			totalChunks:      1646,
-			model:            "jina",
-			lastIndexedAt:    "2026-05-30T12:00:00Z",
-			stale:            false,
+			servers:       []serverStatus{okServer()},
+			projectPath:   "/repo",
+			indexed:       true,
+			totalFiles:    158,
+			indexedFiles:  158,
+			totalChunks:   1646,
+			model:         "jina",
+			lastIndexedAt: "2026-05-30T12:00:00Z",
+			stale:         false,
 		}
 		out := formatStatus(r)
 		if !strings.Contains(out, "Embedding service: OK (ollama, http://localhost:11434, jina)") {
@@ -73,9 +86,11 @@ func TestFormatStatus(t *testing.T) {
 
 	t.Run("service unreachable", func(t *testing.T) {
 		r := statusResult{
-			server:           config.ServerConfig{Backend: "ollama", Host: "http://localhost:11434"},
-			serviceReachable: false,
-			serviceMessage:   "service unreachable: connection refused",
+			servers: []serverStatus{{
+				server:    config.ServerConfig{Backend: "ollama", Host: "http://localhost:11434"},
+				reachable: false,
+				message:   "service unreachable: connection refused",
+			}},
 		}
 		out := formatStatus(r)
 		if !strings.Contains(out, "Embedding service: ERROR (ollama, http://localhost:11434) — service unreachable: connection refused") {
@@ -83,13 +98,41 @@ func TestFormatStatus(t *testing.T) {
 		}
 	})
 
+	t.Run("multiple servers each reported", func(t *testing.T) {
+		r := statusResult{
+			servers: []serverStatus{
+				okServer(),
+				{
+					server:    config.ServerConfig{Backend: "lmstudio", Host: "http://localhost:1234"},
+					reachable: false,
+					message:   "service unreachable: nope",
+				},
+			},
+			projectPath: "/repo",
+			indexed:     false,
+		}
+		out := formatStatus(r)
+		if !strings.Contains(out, "Embedding service: OK (ollama, http://localhost:11434, jina)") {
+			t.Errorf("missing ollama OK line:\n%s", out)
+		}
+		if !strings.Contains(out, "Embedding service: ERROR (lmstudio, http://localhost:1234) — service unreachable: nope") {
+			t.Errorf("missing lmstudio ERROR line:\n%s", out)
+		}
+	})
+
+	t.Run("no servers configured", func(t *testing.T) {
+		r := statusResult{servers: nil, projectPath: "/repo", indexed: false}
+		out := formatStatus(r)
+		if !strings.Contains(out, "Embedding service: ERROR — no servers configured") {
+			t.Errorf("missing no-servers line:\n%s", out)
+		}
+	})
+
 	t.Run("not indexed", func(t *testing.T) {
 		r := statusResult{
-			server:           config.ServerConfig{Backend: "ollama", Host: "http://localhost:11434", Model: "jina"},
-			serviceReachable: true,
-			serviceMessage:   "service is healthy",
-			projectPath:      "/repo",
-			indexed:          false,
+			servers:     []serverStatus{okServer()},
+			projectPath: "/repo",
+			indexed:     false,
 		}
 		out := formatStatus(r)
 		if !strings.Contains(out, "/repo — not indexed") {
@@ -99,12 +142,11 @@ func TestFormatStatus(t *testing.T) {
 
 	t.Run("indexed but never indexed shows never", func(t *testing.T) {
 		r := statusResult{
-			server:           config.ServerConfig{Backend: "ollama", Host: "h", Model: "m"},
-			serviceReachable: true,
-			projectPath:      "/repo",
-			indexed:          true,
-			lastIndexedAt:    "",
-			stale:            true,
+			servers:       []serverStatus{okServer()},
+			projectPath:   "/repo",
+			indexed:       true,
+			lastIndexedAt: "",
+			stale:         true,
 		}
 		out := formatStatus(r)
 		if !strings.Contains(out, "Last indexed: never") {
@@ -114,12 +156,11 @@ func TestFormatStatus(t *testing.T) {
 
 	t.Run("stale shows yes", func(t *testing.T) {
 		r := statusResult{
-			server:           config.ServerConfig{Backend: "ollama", Host: "h", Model: "m"},
-			serviceReachable: true,
-			projectPath:      "/repo",
-			indexed:          true,
-			lastIndexedAt:    "2026-05-30T12:00:00Z",
-			stale:            true,
+			servers:       []serverStatus{okServer()},
+			projectPath:   "/repo",
+			indexed:       true,
+			lastIndexedAt: "2026-05-30T12:00:00Z",
+			stale:         true,
 		}
 		out := formatStatus(r)
 		if !strings.Contains(out, "Stale: yes") {
@@ -146,6 +187,11 @@ func TestRunStatusMissingIndexNoSideEffect(t *testing.T) {
 
 	if r.indexed {
 		t.Error("expected not indexed for empty temp dir, got indexed=true")
+	}
+
+	// collectStatus must probe every configured server.
+	if len(r.servers) != len(cfg.Servers()) {
+		t.Errorf("expected %d server results, got %d", len(cfg.Servers()), len(r.servers))
 	}
 
 	dbPath := config.DBPathForProject(tmp, emb.ModelName())
