@@ -15,6 +15,8 @@
 package cmd
 
 import (
+	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -124,4 +126,30 @@ func TestFormatStatus(t *testing.T) {
 			t.Errorf("expected Stale: yes:\n%s", out)
 		}
 	})
+}
+
+func TestRunStatusMissingIndexNoSideEffect(t *testing.T) {
+	// A temp dir with no git repo and no existing index: collectStatus must
+	// report not-indexed and must NOT create a DB file.
+	tmp := t.TempDir()
+
+	// Isolate XDG_DATA_HOME so we observe DB creation cleanly.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cfg, err := config.NewConfigService(config.DefaultConfigPath())
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	emb := newEmbedder(cfg)
+
+	r := collectStatus(context.Background(), cfg, emb, tmp)
+
+	if r.indexed {
+		t.Error("expected not indexed for empty temp dir, got indexed=true")
+	}
+
+	dbPath := config.DBPathForProject(tmp, emb.ModelName())
+	if _, statErr := os.Stat(dbPath); statErr == nil {
+		t.Errorf("collectStatus created a DB file at %s; it must be read-only", dbPath)
+	}
 }
