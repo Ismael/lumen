@@ -1121,6 +1121,36 @@ func (ic *indexerCache) handleIndexStatus(_ context.Context, _ *mcp.CallToolRequ
 	}, nil, nil
 }
 
+// probeEmbeddingService pings srv's model-listing endpoint and reports whether
+// it is reachable along with a human-readable message. Ollama is probed at
+// /api/tags, LM Studio at /v1/models. The probe is bounded to 5 seconds.
+func probeEmbeddingService(ctx context.Context, srv config.ServerConfig) (bool, string) {
+	probeURL := srv.Host + "/api/tags"
+	if srv.Backend == config.BackendLMStudio {
+		probeURL = srv.Host + "/v1/models"
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return false, fmt.Sprintf("failed to create request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, fmt.Sprintf("service unreachable: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if resp.StatusCode >= 500 {
+		return false, fmt.Sprintf("service returned HTTP %d", resp.StatusCode)
+	}
+
+	return true, "service is healthy"
+}
+
 // handleHealthCheck pings the configured embedding service and reports status.
 // It checks the currently active server (after failover), not always server[0].
 func (ic *indexerCache) handleHealthCheck(ctx context.Context, _ *mcp.CallToolRequest, _ HealthCheckInput) (*mcp.CallToolResult, any, error) {
@@ -1132,36 +1162,9 @@ func (ic *indexerCache) handleHealthCheck(ctx context.Context, _ *mcp.CallToolRe
 		}
 	}
 	srv := servers[idx]
-	backend := srv.Backend
-	host := srv.Host
-	model := srv.Model
-	probeURL := host + "/api/tags"
-	if backend == config.BackendLMStudio {
-		probeURL = host + "/v1/models"
-	}
 
-	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, probeURL, nil)
-	if err != nil {
-		return healthResult(backend, host, model, false,
-			fmt.Sprintf("failed to create request: %v", err)), nil, nil
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return healthResult(backend, host, model, false,
-			fmt.Sprintf("service unreachable: %v", err)), nil, nil
-	}
-	_ = resp.Body.Close()
-
-	if resp.StatusCode >= 500 {
-		return healthResult(backend, host, model, false,
-			fmt.Sprintf("service returned HTTP %d", resp.StatusCode)), nil, nil
-	}
-
-	return healthResult(backend, host, model, true, "service is healthy"), nil, nil
+	reachable, message := probeEmbeddingService(ctx, srv)
+	return healthResult(srv.Backend, srv.Host, srv.Model, reachable, message), nil, nil
 }
 
 func healthResult(backend, host, model string, reachable bool, message string) *mcp.CallToolResult {
