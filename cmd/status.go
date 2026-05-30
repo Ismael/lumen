@@ -158,7 +158,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	r := collectStatus(cmd.Context(), cfg, emb, indexRoot)
-	fmt.Fprintln(cmd.OutOrStdout(), formatStatus(r))
+	if _, err := fmt.Fprintln(cmd.OutOrStdout(), formatStatus(r)); err != nil {
+		return err
+	}
 
 	if statusExitCode(r) != 0 {
 		return errStatusUnhealthy
