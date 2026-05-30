@@ -19,13 +19,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/ory/lumen/internal/config"
 	"github.com/ory/lumen/internal/embedder"
-	"github.com/ory/lumen/internal/git"
 	"github.com/ory/lumen/internal/index"
 	"github.com/ory/lumen/internal/merkle"
 	"github.com/spf13/cobra"
@@ -148,18 +146,18 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if len(args) == 1 {
 		target = args[0]
 	}
-	projectPath, err := filepath.Abs(target)
-	if err != nil {
-		return fmt.Errorf("resolve path: %w", err)
-	}
-
 	cfg, err := loadConfigWithFlags(cmd)
 	if err != nil {
 		return err
 	}
 	emb := newEmbedder(cfg)
 
-	r := collectStatus(cmd.Context(), cfg, emb, projectPath)
+	indexRoot, _, err := resolveIndexRoot(target, "", emb.ModelName())
+	if err != nil {
+		return err
+	}
+
+	r := collectStatus(cmd.Context(), cfg, emb, indexRoot)
 	fmt.Fprintln(cmd.OutOrStdout(), formatStatus(r))
 
 	if statusExitCode(r) != 0 {
@@ -168,17 +166,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// collectStatus runs both checks without side effects: it pings the configured
-// embedding server and reads the index DB read-only (never creating it). The
-// project path is normalized the same way `lumen index` does.
 func collectStatus(ctx context.Context, cfg *config.ConfigService, emb *embedder.FailoverEmbedder, projectPath string) statusResult {
 	r := statusResult{projectPath: projectPath}
 
 	// Probe every configured server concurrently, preserving config order in
-	// the result. The MCP handleHealthCheck handler reports only the active
-	// failover server; a one-shot CLI has no live failover state, so it reports
-	// all configured servers and treats the service as healthy when any one is
-	// reachable (matching failover behavior).
+	// the result.
 	servers := cfg.Servers()
 	r.servers = make([]serverStatus, len(servers))
 	var wg sync.WaitGroup
@@ -193,14 +185,6 @@ func collectStatus(ctx context.Context, cfg *config.ConfigService, emb *embedder
 	wg.Wait()
 
 	modelName := emb.ModelName()
-
-	// Normalize the path the same way the indexer does so we read the right DB.
-	if root, gitErr := git.RepoRoot(projectPath); gitErr == nil {
-		projectPath = root
-	} else if ancestor := findAncestorIndex(projectPath, modelName); ancestor != "" {
-		projectPath = ancestor
-	}
-	r.projectPath = projectPath
 
 	if unindexable, _ := merkle.IsRootUnindexable(projectPath); unindexable {
 		r.indexed = false
