@@ -30,6 +30,7 @@ import (
 const (
 	flagAll     = "all"
 	flagMissing = "missing"
+	flagLegacy  = "legacy"
 	flagDryRun  = "dry-run"
 )
 
@@ -43,6 +44,7 @@ func init() {
 func registerPurgeFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool(flagAll, false, "Remove every index under the data directory")
 	cmd.Flags().Bool(flagMissing, false, "Remove indexes whose project folder no longer exists")
+	cmd.Flags().Bool(flagLegacy, false, "Remove only legacy/unreadable indexes lacking project_path metadata")
 	cmd.Flags().Bool(flagDryRun, false, "With --missing, list what would be removed without deleting")
 }
 
@@ -68,7 +70,13 @@ or using custom models never leaves orphan indexes.
               the next search). Also clears legacy indexes created by older
               binaries that did not record project_path.
   --missing   Remove every index whose recorded project folder no longer exists
-              on disk. Only deletes when the folder is confirmed missing.
+              on disk (only deletes a project index when its folder is confirmed
+              missing), plus any unreadable/corrupt index directories.
+  --legacy    Remove only legacy indexes created by older binaries that did not
+              record project_path, plus any unreadable/corrupt index directories.
+              Legacy indexes are still usable by the system (located by path
+              hash) but invisible to path- and --missing-based purge. Cannot be
+              combined with other flags or paths.
   --dry-run   With --missing, list what would be removed without deleting.
 
 Note: a concurrently running indexer for a purged project may log a write
@@ -80,9 +88,10 @@ error and exit; re-run "lumen index" afterwards to rebuild.`,
 func runPurge(cmd *cobra.Command, args []string) error {
 	all, _ := cmd.Flags().GetBool(flagAll)
 	missing, _ := cmd.Flags().GetBool(flagMissing)
+	legacy, _ := cmd.Flags().GetBool(flagLegacy)
 	dryRun, _ := cmd.Flags().GetBool(flagDryRun)
 
-	if err := validatePurgeFlags(all, missing, dryRun, len(args)); err != nil {
+	if err := validatePurgeFlags(all, missing, legacy, dryRun, len(args)); err != nil {
 		return err
 	}
 
@@ -92,6 +101,8 @@ func runPurge(cmd *cobra.Command, args []string) error {
 	switch {
 	case all:
 		return purgeAll(stderr)
+	case legacy:
+		return purgeLegacy(stderr, stdout)
 	case missing:
 		return purgeMissing(stderr, stdout, dryRun)
 	default:
@@ -106,16 +117,21 @@ func runPurge(cmd *cobra.Command, args []string) error {
 	}
 }
 
-// validatePurgeFlags enforces mutual exclusivity of the purge modes.
-func validatePurgeFlags(all, missing, dryRun bool, nArgs int) error {
-	if all && missing {
-		return fmt.Errorf("--all and --missing cannot be combined")
+// validatePurgeFlags enforces mutual exclusivity of the purge modes. --all,
+// --missing, and --legacy are the three exclusive whole-dataset modes; explicit
+// paths select the default per-project mode and combine with none of them.
+func validatePurgeFlags(all, missing, legacy, dryRun bool, nArgs int) error {
+	modes := 0
+	for _, set := range []bool{all, missing, legacy} {
+		if set {
+			modes++
+		}
 	}
-	if all && nArgs > 0 {
-		return fmt.Errorf("--all cannot be combined with explicit paths")
+	if modes > 1 {
+		return fmt.Errorf("--all, --missing, and --legacy are mutually exclusive")
 	}
-	if missing && nArgs > 0 {
-		return fmt.Errorf("--missing cannot be combined with explicit paths")
+	if modes > 0 && nArgs > 0 {
+		return fmt.Errorf("--all, --missing, and --legacy cannot be combined with explicit paths")
 	}
 	if dryRun && !missing {
 		return fmt.Errorf("--dry-run is only valid with --missing")
@@ -123,6 +139,11 @@ func validatePurgeFlags(all, missing, dryRun bool, nArgs int) error {
 	return nil
 }
 
+// purgeAll removes the entire lumen data directory. This is unconditional by
+// design: --all must wipe everything regardless of whether individual indexes
+// can be scanned or read. The pre-delete scan is best-effort and used only for
+// per-index logging — its error is deliberately ignored, since a corrupt or
+// unreadable index is exactly the kind of state --all exists to clear.
 func purgeAll(stderr io.Writer) error {
 	dataDir := lumenDataDir()
 
@@ -139,16 +160,18 @@ func purgeAll(stderr io.Writer) error {
 	}
 
 	// Log each index directory before wiping, matching the per-index logging
-	// used by the other purge modes. Legacy dirs without project_path metadata
-	// are logged by path alone.
-	indexMap, legacy, _ := scanIndexes(dataDir)
+	// used by the other purge modes. Dirs without project_path metadata and
+	// unreadable dirs are logged by path alone.
+	indexMap, noMeta, unreadable, _ := scanIndexes(dataDir)
 	for projectPath, hashDirs := range indexMap {
 		for _, hashDir := range hashDirs {
 			_, _ = fmt.Fprintf(stderr, "Removed %s (%s)\n", hashDir, projectPath)
 		}
 	}
-	for _, hashDir := range legacy {
-		_, _ = fmt.Fprintf(stderr, "Removed %s\n", hashDir)
+	for _, dirs := range [][]string{noMeta, unreadable} {
+		for _, hashDir := range dirs {
+			_, _ = fmt.Fprintf(stderr, "Removed %s\n", hashDir)
+		}
 	}
 
 	if err := os.RemoveAll(dataDir); err != nil {
@@ -159,7 +182,7 @@ func purgeAll(stderr io.Writer) error {
 }
 
 func purgeProjects(stderr, stdout io.Writer, args []string) error {
-	indexMap, _, err := scanIndexes(lumenDataDir())
+	indexMap, _, _, err := scanIndexes(lumenDataDir())
 	if err != nil {
 		return err
 	}
@@ -178,7 +201,7 @@ func purgeProjects(stderr, stdout io.Writer, args []string) error {
 }
 
 func purgeMissing(stderr, stdout io.Writer, dryRun bool) error {
-	indexMap, _, err := scanIndexes(lumenDataDir())
+	indexMap, _, unreadable, err := scanIndexes(lumenDataDir())
 	if err != nil {
 		return err
 	}
@@ -186,6 +209,16 @@ func purgeMissing(stderr, stdout io.Writer, dryRun bool) error {
 	verb := "Removed"
 	if dryRun {
 		verb = "Would remove"
+	}
+
+	remove := func(hashDir, reason string) error {
+		if !dryRun {
+			if err := os.RemoveAll(hashDir); err != nil {
+				return fmt.Errorf("remove %s: %w", hashDir, err)
+			}
+		}
+		_, _ = fmt.Fprintf(stderr, "%s %s (%s)\n", verb, hashDir, reason)
+		return nil
 	}
 
 	removed := 0
@@ -198,33 +231,74 @@ func purgeMissing(stderr, stdout io.Writer, dryRun bool) error {
 			continue
 		}
 		for _, hashDir := range hashDirs {
-			if !dryRun {
-				if err := os.RemoveAll(hashDir); err != nil {
-					return fmt.Errorf("remove %s: %w", hashDir, err)
-				}
+			if err := remove(hashDir, projectPath); err != nil {
+				return err
 			}
-			_, _ = fmt.Fprintf(stderr, "%s %s (%s)\n", verb, hashDir, projectPath)
 			removed++
 		}
 	}
 
-	_, _ = fmt.Fprintf(stdout, "%s %d index director%s whose folder no longer exists.\n", verb, removed, pluralY(removed))
+	// Unreadable/corrupt index dirs have no folder mapping and can never be
+	// served or rebuilt in place, so --missing clears them too.
+	for _, hashDir := range unreadable {
+		if err := remove(hashDir, "unreadable"); err != nil {
+			return err
+		}
+		removed++
+	}
+
+	_, _ = fmt.Fprintf(stdout, "%s %d index director%s (missing folders and unreadable indexes).\n", verb, removed, pluralY(removed))
 	return nil
 }
 
-// scanIndexes walks dataDir (one level deep) and returns a map of stored
-// project_path → list of hash directories for that project, plus the hash
-// directories that can't be read or lack project_path metadata (legacy
-// indexes). Path-based purge modes ignore the legacy slice so a single broken
-// index never blocks purging of others; --all uses it to log those dirs.
-func scanIndexes(dataDir string) (indexMap map[string][]string, legacy []string, err error) {
+// purgeLegacy removes legacy hash directories: readable DBs that do not record
+// project_path (still usable by the system, located by path hash, but invisible
+// to path- and --missing-based purge) plus unreadable/corrupt directories.
+// --legacy is the explicit way to clear both.
+func purgeLegacy(stderr, stdout io.Writer) error {
+	_, noMeta, unreadable, err := scanIndexes(lumenDataDir())
+	if err != nil {
+		return err
+	}
+
+	removed := 0
+	for _, dirs := range [][]string{noMeta, unreadable} {
+		for _, hashDir := range dirs {
+			if err := os.RemoveAll(hashDir); err != nil {
+				return fmt.Errorf("remove %s: %w", hashDir, err)
+			}
+			_, _ = fmt.Fprintf(stderr, "Removed %s\n", hashDir)
+			removed++
+		}
+	}
+
+	_, _ = fmt.Fprintf(stdout, "Removed %d legacy index director%s.\n", removed, pluralY(removed))
+	return nil
+}
+
+// scanIndexes walks dataDir (one level deep) and classifies each hash directory
+// into three buckets:
+//
+//   - indexMap: stored project_path → hash directories (readable DB with
+//     project_path metadata).
+//   - noMeta: readable DBs that do not record project_path (created by older
+//     binaries). These remain usable by the system — they are located by path
+//     hash, not by metadata — so path- and --missing-based purge leave them
+//     alone; only --all and --legacy remove them.
+//   - unreadable: directories whose index.db is missing or corrupt. These can
+//     never be served or rebuilt in place, so every purge mode that scans
+//     (--missing and --legacy) clears them.
+//
+// Path-based purge ignores the non-indexMap buckets so a single broken index
+// never blocks purging of others.
+func scanIndexes(dataDir string) (indexMap map[string][]string, noMeta, unreadable []string, err error) {
 	indexMap = make(map[string][]string)
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return indexMap, nil, nil
+			return indexMap, nil, nil, nil
 		}
-		return nil, nil, fmt.Errorf("read data dir: %w", err)
+		return nil, nil, nil, fmt.Errorf("read data dir: %w", err)
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -232,14 +306,17 @@ func scanIndexes(dataDir string) (indexMap map[string][]string, legacy []string,
 		}
 		hashDir := filepath.Join(dataDir, entry.Name())
 		dbPath := filepath.Join(hashDir, "index.db")
-		stored, err := store.ReadMetaAt(dbPath, "project_path")
-		if err != nil || stored == "" {
-			legacy = append(legacy, hashDir)
-			continue
+		stored, readErr := store.ReadMetaAt(dbPath, "project_path")
+		switch {
+		case readErr != nil:
+			unreadable = append(unreadable, hashDir)
+		case stored == "":
+			noMeta = append(noMeta, hashDir)
+		default:
+			indexMap[stored] = append(indexMap[stored], hashDir)
 		}
-		indexMap[stored] = append(indexMap[stored], hashDir)
 	}
-	return indexMap, legacy, nil
+	return indexMap, noMeta, unreadable, nil
 }
 
 // purgeOneTarget resolves arg to a project root and removes every hash

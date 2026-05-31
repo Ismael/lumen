@@ -29,18 +29,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// seedIndex creates a real SQLite index DB at the hash-named directory for
-// (projectPath, model) with project_path recorded in project_meta, so that
-// tests exercise the same metadata-scan code path as production.
-func seedIndex(t *testing.T, projectPath, model string) string {
+// seedIndexWithMeta creates a real SQLite index DB at the hash-named directory
+// for (projectPath, model). When recordPath is true it records project_path in
+// project_meta (the modern layout exercised by the metadata-scan code path);
+// when false it omits it, mimicking indexes written by older binaries.
+func seedIndexWithMeta(t *testing.T, projectPath, model string, recordPath bool) string {
 	t.Helper()
 	dbPath := config.DBPathForProject(projectPath, model)
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 	s, err := store.New(dbPath, 4)
 	require.NoError(t, err)
-	require.NoError(t, s.SetMeta("project_path", projectPath))
+	if recordPath {
+		require.NoError(t, s.SetMeta("project_path", projectPath))
+	}
 	require.NoError(t, s.Close())
 	return filepath.Dir(dbPath)
+}
+
+// seedIndex creates an index DB that records project_path.
+func seedIndex(t *testing.T, projectPath, model string) string {
+	t.Helper()
+	return seedIndexWithMeta(t, projectPath, model, true)
+}
+
+// seedLegacyIndex creates an index DB with NO project_path metadata. Such DBs
+// are fully usable by the system (located by path hash) but invisible to
+// project_path-based purge, so scanIndexes classifies them as no-metadata legacy.
+func seedLegacyIndex(t *testing.T, projectPath, model string) string {
+	t.Helper()
+	return seedIndexWithMeta(t, projectPath, model, false)
+}
+
+// seedCorruptDir creates a hash directory whose index.db is missing, mimicking
+// an unreadable/corrupt index. scanIndexes classifies it as unreadable.
+func seedCorruptDir(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(lumenDataDir(), name)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	return dir
 }
 
 // runPurgeCmd invokes runPurge with the provided args and optional flag names
@@ -118,15 +144,6 @@ func TestPurge_All_RemovesEverything(t *testing.T) {
 
 	_, err = os.Stat(lumenRoot)
 	assert.True(t, os.IsNotExist(err), "lumen data dir should be gone, got err=%v", err)
-}
-
-func TestPurge_All_WithPaths_Errors(t *testing.T) {
-	tmp := resolvedTempDir(t)
-	t.Setenv("XDG_DATA_HOME", tmp)
-
-	_, _, err := runPurgeCmd(t, []string{"/some/path"}, flagAll)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--all")
 }
 
 func TestPurge_SinglePath_RemovesOnlyThatProject(t *testing.T) {
@@ -265,78 +282,163 @@ func TestPurge_MultiplePaths_MixedHitsAndMisses(t *testing.T) {
 	assert.Contains(t, strings.ToLower(stderrOut), "no index found", "miss should be reported")
 }
 
-func TestPurge_Missing_RemovesOnlyDeletedFolders(t *testing.T) {
-	tmp := resolvedTempDir(t)
-	t.Setenv("XDG_DATA_HOME", tmp)
+// TestPurge_FlagBehavior consolidates the flag-validation and --missing/--legacy
+// behaviors into one table-driven test. Each case sets up its own data dir state
+// via setup (returning named paths for postCheck) and asserts error, stderr, and
+// resulting filesystem state.
+func TestPurge_FlagBehavior(t *testing.T) {
+	cases := []struct {
+		name               string
+		flags              []string
+		args               []string
+		setup              func(t *testing.T, tmp string) map[string]string
+		wantErr            bool
+		wantErrContains    []string
+		wantStderrContains string
+		postCheck          func(t *testing.T, paths map[string]string, stderrOut string)
+	}{
+		{
+			name:            "all with paths errors",
+			flags:           []string{flagAll},
+			args:            []string{"/some/path"},
+			wantErr:         true,
+			wantErrContains: []string{"--all"},
+		},
+		{
+			name:            "all and missing errors",
+			flags:           []string{flagAll, flagMissing},
+			wantErr:         true,
+			wantErrContains: []string{"--all", "--missing"},
+		},
+		{
+			name:            "missing with paths errors",
+			flags:           []string{flagMissing},
+			args:            []string{"/some/path"},
+			wantErr:         true,
+			wantErrContains: []string{"--missing"},
+		},
+		{
+			name:            "dry-run without missing errors",
+			flags:           []string{flagDryRun},
+			wantErr:         true,
+			wantErrContains: []string{"--dry-run is only valid with --missing"},
+		},
+		{
+			name:            "legacy with all errors",
+			flags:           []string{flagLegacy, flagAll},
+			wantErr:         true,
+			wantErrContains: []string{"--legacy"},
+		},
+		{
+			name:            "legacy with paths errors",
+			flags:           []string{flagLegacy},
+			args:            []string{"/some/path"},
+			wantErr:         true,
+			wantErrContains: []string{"--legacy"},
+		},
+		{
+			name:  "missing removes deleted folders and unreadable dirs",
+			flags: []string{flagMissing},
+			setup: func(t *testing.T, tmp string) map[string]string {
+				gone := filepath.Join(tmp, "gone")
+				alive := filepath.Join(tmp, "alive")
+				require.NoError(t, os.MkdirAll(gone, 0o755))
+				require.NoError(t, os.MkdirAll(alive, 0o755))
+				hashGone := seedIndex(t, gone, embedder.DefaultModel)
+				hashAlive := seedIndex(t, alive, embedder.DefaultModel)
+				hashCorrupt := seedCorruptDir(t, "corrupthash")
+				require.NoError(t, os.RemoveAll(gone)) // delete one project's folder
+				return map[string]string{"gone": hashGone, "alive": hashAlive, "corrupt": hashCorrupt}
+			},
+			postCheck: func(t *testing.T, paths map[string]string, stderrOut string) {
+				assert.Contains(t, stderrOut, paths["gone"], "should log the removed index dir")
+				_, err := os.Stat(paths["gone"])
+				assert.True(t, os.IsNotExist(err), "index for deleted folder should be removed")
+				_, err = os.Stat(paths["corrupt"])
+				assert.True(t, os.IsNotExist(err), "unreadable index dir should be removed")
+				_, err = os.Stat(paths["alive"])
+				assert.NoError(t, err, "index for existing folder should be kept")
+			},
+		},
+		{
+			name:  "missing keeps existing folders",
+			flags: []string{flagMissing},
+			setup: func(t *testing.T, tmp string) map[string]string {
+				alive := filepath.Join(tmp, "alive")
+				require.NoError(t, os.MkdirAll(alive, 0o755))
+				return map[string]string{"alive": seedIndex(t, alive, embedder.DefaultModel)}
+			},
+			postCheck: func(t *testing.T, paths map[string]string, stderrOut string) {
+				_, err := os.Stat(paths["alive"])
+				assert.NoError(t, err, "index for existing folder should be kept")
+			},
+		},
+		{
+			name:               "dry-run missing deletes nothing",
+			flags:              []string{flagMissing, flagDryRun},
+			wantStderrContains: "Would remove",
+			setup: func(t *testing.T, tmp string) map[string]string {
+				gone := filepath.Join(tmp, "gone")
+				require.NoError(t, os.MkdirAll(gone, 0o755))
+				hashGone := seedIndex(t, gone, embedder.DefaultModel)
+				require.NoError(t, os.RemoveAll(gone))
+				return map[string]string{"gone": hashGone}
+			},
+			postCheck: func(t *testing.T, paths map[string]string, stderrOut string) {
+				assert.Contains(t, stderrOut, paths["gone"])
+				_, err := os.Stat(paths["gone"])
+				assert.NoError(t, err, "dry-run must not delete the index dir")
+			},
+		},
+		{
+			name:  "legacy removes metadata-less and unreadable indexes",
+			flags: []string{flagLegacy},
+			setup: func(t *testing.T, tmp string) map[string]string {
+				alive := filepath.Join(tmp, "alive")
+				require.NoError(t, os.MkdirAll(alive, 0o755))
+				hashAlive := seedIndex(t, alive, embedder.DefaultModel)
+				hashLegacy := seedLegacyIndex(t, filepath.Join(tmp, "legacyproj"), embedder.DefaultModel)
+				hashCorrupt := seedCorruptDir(t, "corrupthash")
+				return map[string]string{"alive": hashAlive, "legacy": hashLegacy, "corrupt": hashCorrupt}
+			},
+			postCheck: func(t *testing.T, paths map[string]string, stderrOut string) {
+				assert.Contains(t, stderrOut, paths["legacy"], "should log the removed legacy dir")
+				_, err := os.Stat(paths["legacy"])
+				assert.True(t, os.IsNotExist(err), "legacy (no-metadata) index dir should be removed")
+				_, err = os.Stat(paths["corrupt"])
+				assert.True(t, os.IsNotExist(err), "unreadable index dir should be removed")
+				_, err = os.Stat(paths["alive"])
+				assert.NoError(t, err, "index with project_path metadata should be kept")
+			},
+		},
+	}
 
-	gone := filepath.Join(tmp, "gone")
-	alive := filepath.Join(tmp, "alive")
-	require.NoError(t, os.MkdirAll(gone, 0o755))
-	require.NoError(t, os.MkdirAll(alive, 0o755))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := resolvedTempDir(t)
+			t.Setenv("XDG_DATA_HOME", tmp)
 
-	hashGone := seedIndex(t, gone, embedder.DefaultModel)
-	hashAlive := seedIndex(t, alive, embedder.DefaultModel)
+			var paths map[string]string
+			if tc.setup != nil {
+				paths = tc.setup(t, tmp)
+			}
 
-	// Delete one project's folder.
-	require.NoError(t, os.RemoveAll(gone))
+			_, stderrOut, err := runPurgeCmd(t, tc.args, tc.flags...)
 
-	_, stderrOut, err := runPurgeCmd(t, nil, flagMissing)
-	require.NoError(t, err)
-	assert.Contains(t, stderrOut, hashGone, "should log the removed index dir")
-
-	_, err = os.Stat(hashGone)
-	assert.True(t, os.IsNotExist(err), "index for deleted folder should be removed")
-	_, err = os.Stat(hashAlive)
-	assert.NoError(t, err, "index for existing folder should be kept")
-}
-
-func TestPurge_Missing_AllFoldersExist_RemovesNothing(t *testing.T) {
-	tmp := resolvedTempDir(t)
-	t.Setenv("XDG_DATA_HOME", tmp)
-
-	alive := filepath.Join(tmp, "alive")
-	require.NoError(t, os.MkdirAll(alive, 0o755))
-	hashAlive := seedIndex(t, alive, embedder.DefaultModel)
-
-	_, _, err := runPurgeCmd(t, nil, flagMissing)
-	require.NoError(t, err)
-
-	_, err = os.Stat(hashAlive)
-	assert.NoError(t, err, "index for existing folder should be kept")
-}
-
-func TestPurge_Missing_WithPaths_Errors(t *testing.T) {
-	tmp := resolvedTempDir(t)
-	t.Setenv("XDG_DATA_HOME", tmp)
-
-	_, _, err := runPurgeCmd(t, []string{"/some/path"}, flagMissing)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--missing")
-}
-
-func TestPurge_DryRun_Missing_DeletesNothing(t *testing.T) {
-	tmp := resolvedTempDir(t)
-	t.Setenv("XDG_DATA_HOME", tmp)
-
-	gone := filepath.Join(tmp, "gone")
-	require.NoError(t, os.MkdirAll(gone, 0o755))
-	hashGone := seedIndex(t, gone, embedder.DefaultModel)
-	require.NoError(t, os.RemoveAll(gone))
-
-	_, stderrOut, err := runPurgeCmd(t, nil, flagMissing, flagDryRun)
-	require.NoError(t, err)
-	assert.Contains(t, stderrOut, "Would remove")
-	assert.Contains(t, stderrOut, hashGone)
-
-	_, err = os.Stat(hashGone)
-	assert.NoError(t, err, "dry-run must not delete the index dir")
-}
-
-func TestPurge_DryRun_WithoutMissing_Errors(t *testing.T) {
-	tmp := resolvedTempDir(t)
-	t.Setenv("XDG_DATA_HOME", tmp)
-
-	_, _, err := runPurgeCmd(t, nil, flagDryRun)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--dry-run is only valid with --missing")
+			if tc.wantErr {
+				require.Error(t, err)
+				for _, want := range tc.wantErrContains {
+					assert.Contains(t, err.Error(), want)
+				}
+				return
+			}
+			require.NoError(t, err)
+			if tc.wantStderrContains != "" {
+				assert.Contains(t, stderrOut, tc.wantStderrContains)
+			}
+			if tc.postCheck != nil {
+				tc.postCheck(t, paths, stderrOut)
+			}
+		})
+	}
 }
