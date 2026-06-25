@@ -14,7 +14,7 @@ case "$ARCH" in
   aarch64) ARCH="arm64" ;;
 esac
 
-# Find binary: check bin/ first, then goreleaser dist/ output, then download
+# Find binary: check bin/ first, then goreleaser dist/ output, build, then download
 BINARY=""
 for candidate in \
   "${PLUGIN_ROOT}/bin/lumen" \
@@ -24,6 +24,21 @@ for candidate in \
     break
   fi
 done
+
+# Build from source when no prebuilt binary exists and a Go toolchain is present.
+# Git-based installs (e.g. a fork marketplace) ship the checked-out source but no
+# binary — bin/ is gitignored — so without this they would download a release that
+# does not match this revision. sqlite-vec needs CGO, hence CGO_ENABLED=1 + fts5.
+# All output goes to stderr; stdout is reserved for the MCP stdio protocol channel.
+if [ -z "$BINARY" ] && command -v go >/dev/null 2>&1 && [ -f "${PLUGIN_ROOT}/go.mod" ]; then
+  CANDIDATE="${PLUGIN_ROOT}/bin/lumen"
+  echo "No prebuilt lumen binary found; building from source at ${PLUGIN_ROOT}..." >&2
+  if (cd "${PLUGIN_ROOT}" && CGO_ENABLED=1 go build -tags=fts5 -o "$CANDIDATE" .) >&2; then
+    BINARY="$CANDIDATE"
+  else
+    echo "Build from source failed; falling back to release download" >&2
+  fi
+fi
 
 # Download on first run if no binary found
 if [ -z "$BINARY" ]; then
