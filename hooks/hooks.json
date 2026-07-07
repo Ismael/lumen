@@ -10,17 +10,6 @@
           }
         ]
       }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Grep|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/run\" hook pre-tool-use lumen"
-          }
-        ]
-      }
-    ]
+    ]    
   }
 }
