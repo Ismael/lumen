@@ -91,7 +91,6 @@ func probeScenarios(ctx context.Context, cfg *Config) error {
 	}{
 		{"baseline", probeBaseline},
 		{"with-lumen", probeWithLumen},
-		{"with-lumen hook", probeHookFiringWithLumen},
 	}
 
 	for _, p := range probes {
@@ -137,36 +136,6 @@ func probeWithLumen(ctx context.Context, cfg *Config) error {
 
 	if !strings.Contains(strings.ToLower(out), "semantic_search") {
 		return fmt.Errorf("with-lumen should have semantic_search, but probe output does not mention it")
-	}
-	return nil
-}
-
-// probeHookFiringWithLumen verifies that the PreToolUse hook intercepts a
-// natural-language Grep call and redirects Claude to mcp__lumen__semantic_search
-// in with-lumen (where Grep/Glob are available alongside lumen).
-func probeHookFiringWithLumen(ctx context.Context, cfg *Config) error {
-	mcpPath, cleanup, err := runner.WriteMCPConfig(runner.WithLumen, cfg.LumenBinary, cfg.Backend, cfg.EmbedModel)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	extraArgs := append(runner.ClaudeArgs(runner.WithLumen, cfg.RepoRoot),
-		"--output-format", "stream-json",
-	)
-	// Pattern is >40 chars, spaces, no regex metacharacters — matches
-	// looksLikeNaturalLanguage so the PreToolUse hook returns "suggest"
-	// naming mcp__lumen__semantic_search. Claude should call it instead.
-	const prompt = "Use the Grep tool with pattern " +
-		"'find all places where database connection errors are handled with retry and exponential backoff logic'. " +
-		"Report what you find."
-	out, err := runClaudeProbe(ctx, mcpPath, extraArgs, prompt)
-	if err != nil {
-		return err
-	}
-
-	if !strings.Contains(out, "mcp__lumen__semantic_search") {
-		return fmt.Errorf("with-lumen hook probe: PreToolUse hook did not redirect to mcp__lumen__semantic_search")
 	}
 	return nil
 }

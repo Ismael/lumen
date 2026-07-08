@@ -113,7 +113,7 @@ func runHookSessionStart(_ *cobra.Command, args []string) error {
 }
 
 func generateSessionContextForHost(host, mcpName, cwd string) string {
-	return generateSessionContextInternalWithDirective(sessionStartDirective(host, mcpName), cwd, config.FindDonorIndex, spawnBackgroundIndexer)
+	return generateSessionContextInternalWithDirective(sessionStartDirective(host, mcpName), cwd, spawnBackgroundIndexer)
 }
 
 func sessionStartDirective(host, mcpName string) string {
@@ -124,14 +124,16 @@ func sessionStartDirective(host, mcpName string) string {
 	return "Call " + toolRef + " first for any code discovery task — before Grep, Bash, or Read."
 }
 
-func generateSessionContextInternalWithDirective(directive, cwd string, findDonor func(string, string) string, bgIndexer func(string)) string {
+func generateSessionContextInternalWithDirective(directive, cwd string, bgIndexer func(string)) string {
+	// The directive is the only session context we surface. Index stats and top
+	// symbols were dropped as noise — they cost context on every session start
+	// without changing what the agent should do (call semantic_search first).
 	cfg, err := config.NewConfigService(config.DefaultConfigPath())
 	if err != nil {
-		return directive + " No index yet — auto-created on first call."
+		return directive
 	}
 	emb := newEmbedder(cfg)
 	modelName := emb.ModelName()
-	dims := cfg.ServerDims(0)
 
 	// Normalize cwd to the git repository root so the DB path matches what
 	// `lumen index` and the MCP handler use. For non-git directories, walk
@@ -147,13 +149,10 @@ func generateSessionContextInternalWithDirective(directive, cwd string, findDono
 		// No index yet — kick off background pre-warming so the first search
 		// in this session doesn't pay the full seed + embed cost synchronously.
 		bgIndexer(cwd)
-		if donorPath := findDonor(cwd, modelName); donorPath != "" {
-			return directive + " Sibling worktree index found — indexing in background."
-		}
-		return directive + " No index yet — indexing in background."
+		return directive
 	}
 
-	s, err := store.New(dbPath, dims)
+	s, err := store.New(dbPath, cfg.ServerDims(0))
 	if err != nil {
 		return directive
 	}
@@ -168,29 +167,14 @@ func generateSessionContextInternalWithDirective(directive, cwd string, findDono
 		bgIndexer(cwd)
 	}
 
-	stats, err := s.Stats()
-	if err != nil {
-		return directive
-	}
-
-	symbols, _ := s.TopSymbols(10)
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Lumen index ready: %d files, %d chunks indexed.", stats.TotalFiles, stats.TotalChunks)
-	if len(symbols) > 0 {
-		sb.WriteString(" Top symbols: ")
-		sb.WriteString(strings.Join(symbols, ", "))
-		sb.WriteString(".")
-	}
-	sb.WriteString(" " + directive)
-	return sb.String()
+	return directive
 }
 
 // generateSessionContextInternal is the testable core of generateSessionContext.
-// findDonor and bgIndexer are injected so tests can verify behaviour without
-// spawning real processes or requiring a live git repository.
-func generateSessionContextInternal(cwd string, findDonor func(string, string) string, bgIndexer func(string)) string {
-	return generateSessionContextInternalWithDirective(sessionStartDirective(hookHostClaude, "lumen"), cwd, findDonor, bgIndexer)
+// bgIndexer is injected so tests can verify behaviour without spawning real
+// processes or requiring a live git repository.
+func generateSessionContextInternal(cwd string, bgIndexer func(string)) string {
+	return generateSessionContextInternalWithDirective(sessionStartDirective(hookHostClaude, "lumen"), cwd, bgIndexer)
 }
 
 func normalizeHookHost(host string) (string, error) {

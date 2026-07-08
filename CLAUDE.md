@@ -114,7 +114,7 @@ This loads lumen as a Claude Code plugin directly from the repo. The plugin
 system handles MCP registration, hooks, and skills declaratively via:
 
 - `.claude-plugin/plugin.json` — plugin manifest
-- `hooks/hooks.json` — SessionStart + PreToolUse hooks
+- `hooks/hooks.json` — SessionStart hook
 - `skills/` — `/lumen:doctor` and `/lumen:reindex` skills
 
 Codex, Cursor, and OpenCode reuse the same repo-root `skills/`, `hooks/`, and
