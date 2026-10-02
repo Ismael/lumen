@@ -175,3 +175,42 @@ func TestExtractToolCalls_MissingFile(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 }
+
+func TestToolCall_IsLumenSearch(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"mcp__lumen__semantic_search", true},
+		{"mcp__plugin_lumen_lumen__semantic_search", true},
+		{"mcp__lumen__index_status", false},
+		{"mcp__other__semantic_search", false},
+		{"Grep", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (ToolCall{Name: tt.name}).IsLumenSearch(); got != tt.want {
+				t.Errorf("IsLumenSearch(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasLumenSearch(t *testing.T) {
+	for _, name := range []string{"mcp__lumen__semantic_search", "mcp__plugin_lumen_lumen__semantic_search"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "raw.jsonl")
+			content := `{"type":"tool_use","id":"tu1","name":"` + name + `","input":{"query":"q"}}`
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := HasLumenSearch(path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !got {
+				t.Error("HasLumenSearch = false, want true")
+			}
+		})
+	}
+}

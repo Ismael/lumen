@@ -13,6 +13,12 @@ const (
 	WithLumen Scenario = "with-lumen"
 )
 
+// LumenMCPServerName is the --mcp-config key for the lumen server. The
+// SessionStart hook loaded via --plugin-dir advertises the plugin-namespaced
+// tool id mcp__plugin_lumen_lumen__semantic_search, which only exists under
+// this key.
+const LumenMCPServerName = "plugin_lumen_lumen"
+
 func AllScenarios() []Scenario {
 	return []Scenario{Baseline, WithLumen}
 }
@@ -51,7 +57,7 @@ func WriteMCPConfig(s Scenario, lumenBinary, backend, model string) (string, fun
 	case WithLumen:
 		cfg = mcpConfig{
 			MCPServers: map[string]mcpServer{
-				"lumen": {
+				LumenMCPServerName: {
 					Command: lumenBinary,
 					Args:    []string{"stdio"},
 					Env: map[string]string{

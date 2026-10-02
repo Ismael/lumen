@@ -57,6 +57,13 @@ func TestParseScenarios(t *testing.T) {
 	}
 }
 
+func TestLumenMCPServerName(t *testing.T) {
+	// The SessionStart hook advertises mcp__plugin_lumen_lumen__semantic_search.
+	if LumenMCPServerName != "plugin_lumen_lumen" {
+		t.Fatalf("LumenMCPServerName = %q, want plugin_lumen_lumen", LumenMCPServerName)
+	}
+}
+
 func TestWriteMCPConfig(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -86,13 +93,13 @@ func TestWriteMCPConfig(t *testing.T) {
 				t.Fatalf("parsing config: %v", err)
 			}
 
-			_, hasLumen := cfg.MCPServers["lumen"]
+			_, hasLumen := cfg.MCPServers[LumenMCPServerName]
 			if hasLumen != tt.wantLumen {
 				t.Errorf("has lumen server = %v, want %v", hasLumen, tt.wantLumen)
 			}
 
 			if tt.wantLumen {
-				srv := cfg.MCPServers["lumen"]
+				srv := cfg.MCPServers[LumenMCPServerName]
 				if srv.Command != "/usr/local/bin/lumen" {
 					t.Errorf("Command = %q, want /usr/local/bin/lumen", srv.Command)
 				}

@@ -880,25 +880,6 @@ func (s *Store) CollectionStats() (CollectionStats, error) {
 	return stats, nil
 }
 
-func (s *Store) sharedTopSymbols(n int) ([]string, error) {
-	rows, err := s.reader().Query(`SELECT cd.symbol FROM chunk_defs cd
-		JOIN project_files pf ON pf.file_revision_id = cd.file_revision_id
-		WHERE pf.project_id = ? GROUP BY cd.symbol ORDER BY count(*) DESC LIMIT ?`, s.projectID, n)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var symbols []string
-	for rows.Next() {
-		var symbol string
-		if err := rows.Scan(&symbol); err != nil {
-			return nil, err
-		}
-		symbols = append(symbols, symbol)
-	}
-	return symbols, rows.Err()
-}
-
 func (s *Store) sharedHasSentinelFiles() (bool, error) {
 	var exists bool
 	err := s.reader().QueryRow(`SELECT EXISTS(

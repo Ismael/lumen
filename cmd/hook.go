@@ -119,7 +119,7 @@ func runHookSessionStart(_ *cobra.Command, args []string) error {
 }
 
 func generateSessionContextForHost(host, mcpName, pluginName, cwd string) string {
-	return generateSessionContextInternalWithDirective(sessionStartDirective(host, mcpName, pluginName), cwd, config.FindDonorIndex, spawnBackgroundIndexer)
+	return generateSessionContextInternalWithDirective(sessionStartDirective(host, mcpName, pluginName), cwd, spawnBackgroundIndexer)
 }
 
 func sessionStartDirective(host, mcpName, pluginName string) string {
@@ -137,10 +137,12 @@ func mcpToolReference(pluginName, mcpName, toolName string) string {
 	return "mcp__" + mcpName + "__" + toolName
 }
 
-func generateSessionContextInternalWithDirective(directive, cwd string, findDonor func(string, string) string, bgIndexer func(string)) string {
+func generateSessionContextInternalWithDirective(directive, cwd string, bgIndexer func(string)) string {
+	// The directive is the only context surfaced; index state only decides
+	// whether to pre-warm the index in the background.
 	cfg, err := config.NewConfigService(config.DefaultConfigPath())
 	if err != nil {
-		return directive + " No index yet — auto-created on first call."
+		return directive
 	}
 	emb := newEmbedder(cfg)
 	modelName := emb.ModelName()
@@ -160,10 +162,7 @@ func generateSessionContextInternalWithDirective(directive, cwd string, findDono
 		// No index yet — kick off background pre-warming so the first search
 		// in this session doesn't pay the full seed + embed cost synchronously.
 		bgIndexer(cwd)
-		if donorPath := findDonor(cwd, modelName); donorPath != "" {
-			return directive + " Sibling worktree index found — indexing in background."
-		}
-		return directive + " No index yet — indexing in background."
+		return directive
 	}
 
 	s, err := store.NewCollection(dbPath, dims, cfg.VectorStorage(), cwd)
@@ -178,8 +177,7 @@ func generateSessionContextInternalWithDirective(directive, cwd string, findDono
 	}
 
 	// An index is only ready after a successful indexing pass produced chunks.
-	// A database can exist (and even contain file rows) after embedding failed;
-	// announcing that state as ready hides broken model/backend installations.
+	// A database can exist (and even contain file rows) after embedding failed.
 	lastIndexedAt, metaErr := s.GetMeta("last_indexed_at")
 	lastIndexError, _ := s.GetMeta(store.MetaLastIndexError)
 	completed := metaErr == nil && lastIndexedAt != ""
@@ -192,31 +190,14 @@ func generateSessionContextInternalWithDirective(directive, cwd string, findDono
 	if !completed || stale || stats.TotalChunks == 0 || lastIndexError != "" {
 		bgIndexer(cwd)
 	}
-	if lastIndexError != "" {
-		return fmt.Sprintf("Lumen index unhealthy: last indexing attempt failed (%d files, %d chunks available) — retrying in background. %s", stats.TotalFiles, stats.TotalChunks, directive)
-	}
-	if !completed || stats.TotalChunks == 0 {
-		return fmt.Sprintf("Lumen index not ready: %d files, %d chunks indexed — indexing in background. %s", stats.TotalFiles, stats.TotalChunks, directive)
-	}
-
-	symbols, _ := s.TopSymbols(10)
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Lumen index ready: %d files, %d chunks indexed.", stats.TotalFiles, stats.TotalChunks)
-	if len(symbols) > 0 {
-		sb.WriteString(" Top symbols: ")
-		sb.WriteString(strings.Join(symbols, ", "))
-		sb.WriteString(".")
-	}
-	sb.WriteString(" " + directive)
-	return sb.String()
+	return directive
 }
 
-// generateSessionContextInternal is the testable core of generateSessionContext.
-// findDonor and bgIndexer are injected so tests can verify behaviour without
-// spawning real processes or requiring a live git repository.
-func generateSessionContextInternal(cwd string, findDonor func(string, string) string, bgIndexer func(string)) string {
-	return generateSessionContextInternalWithDirective(sessionStartDirective(hookHostClaude, "lumen", ""), cwd, findDonor, bgIndexer)
+// generateSessionContextInternal is the testable core of generateSessionContextForHost.
+// bgIndexer is injected so tests can verify behaviour without spawning real
+// processes or requiring a live git repository.
+func generateSessionContextInternal(cwd string, bgIndexer func(string)) string {
+	return generateSessionContextInternalWithDirective(sessionStartDirective(hookHostClaude, "lumen", ""), cwd, bgIndexer)
 }
 
 func normalizeHookHost(host string) (string, error) {

@@ -28,7 +28,8 @@ import (
 	"github.com/ory/lumen/internal/store"
 )
 
-// writeHookTestDB creates a minimal SQLite DB stamped with last_indexed_at,
+// writeHookTestDB creates a minimal SQLite DB stamped with last_indexed_at
+// (left unset when lastIndexedAt is the zero time),
 // using the configured embedding model's dimensions so store.New doesn't reset
 // the schema when generateSessionContextInternal opens it.
 func writeHookTestDB(t *testing.T, dbPath string, lastIndexedAt time.Time) {
@@ -50,6 +51,9 @@ func writeHookTestDB(t *testing.T, dbPath string, lastIndexedAt time.Time) {
 		ID: "test-chunk", FilePath: "main.go", Symbol: "Ready", Kind: "function", StartLine: 1, EndLine: 1,
 	}}, [][]float32{make([]float32, dims)}); err != nil {
 		t.Fatalf("InsertChunks: %v", err)
+	}
+	if lastIndexedAt.IsZero() {
+		return
 	}
 	if err := s.SetMeta("last_indexed_at", lastIndexedAt.UTC().Format(time.RFC3339)); err != nil {
 		t.Fatalf("SetMeta: %v", err)
@@ -90,12 +94,16 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// sessionContext runs the SessionStart core with the standalone Claude directive.
+func sessionContext(cwd string, bgIndexer func(string)) string {
+	return generateSessionContextInternal(cwd, bgIndexer)
+}
+
 func TestGenerateSessionContext_NoIndexLegacyToolName(t *testing.T) {
 	// Use the internal version with a no-op bgIndexer to avoid spawning the
 	// test binary as a background process (which would trigger a fork bomb:
 	// the spawned binary runs all tests, which spawn more binaries, etc.)
 	content := generateSessionContextInternal("/nonexistent/path",
-		func(_, _ string) string { return "" },
 		func(_ string) {},
 	)
 	if !strings.Contains(content, "mcp__lumen__semantic_search") {
@@ -144,7 +152,6 @@ func TestGenerateSessionContextForCursor_NoIndex(t *testing.T) {
 	content := generateSessionContextInternalWithDirective(
 		sessionStartDirective(hookHostCursor, "lumen", "lumen"),
 		"/nonexistent/path",
-		func(_, _ string) string { return "" },
 		func(_ string) {},
 	)
 	if strings.Contains(content, "mcp__lumen__semantic_search") {
@@ -286,35 +293,130 @@ func TestPreToolUseOutputJSON(t *testing.T) {
 	}
 }
 
-func TestGenerateSessionContextInternal_SpawnsWhenNoDB(t *testing.T) {
-	// No DB exists → bgIndexer must be called regardless of donor presence.
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
+// TestGenerateSessionContextInternal_DirectiveOnlyAndSpawnDecision covers every
+// index state: the context is always the bare directive, and the background
+// indexer is spawned exactly when the index is missing, incomplete, empty,
+// stale or recorded a failure.
+func TestGenerateSessionContextInternal_DirectiveOnlyAndSpawnDecision(t *testing.T) {
+	directive := sessionStartDirective(hookHostClaude, "lumen", "")
+	const project = "/myproject"
 
-	t.Run("with donor", func(t *testing.T) {
-		var bgCwd string
-		generateSessionContextInternal("/my/worktree",
-			func(_, _ string) string { return "/some/donor.db" },
-			func(cwd string) { bgCwd = cwd },
-		)
-		if bgCwd != "/my/worktree" {
-			t.Fatalf("expected bgIndexer called with /my/worktree, got %q", bgCwd)
-		}
-	})
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T, dbPath string, dims int)
+		wantSpawn bool
+	}{
+		{
+			name:      "missing DB",
+			wantSpawn: true,
+		},
+		{
+			name: "never completed",
+			setup: func(t *testing.T, dbPath string, _ int) {
+				writeHookTestDB(t, dbPath, time.Time{})
+			},
+			wantSpawn: true,
+		},
+		{
+			name: "zero chunks",
+			setup: func(t *testing.T, dbPath string, _ int) {
+				writeEmptyHookTestDB(t, dbPath, time.Now().Add(-30*time.Second))
+			},
+			wantSpawn: true,
+		},
+		{
+			name: "stale",
+			setup: func(t *testing.T, dbPath string, _ int) {
+				writeHookTestDB(t, dbPath, time.Now().Add(-10*time.Minute))
+			},
+			wantSpawn: true,
+		},
+		{
+			name: "last index error",
+			setup: func(t *testing.T, dbPath string, dims int) {
+				writeHookTestDB(t, dbPath, time.Now().Add(-30*time.Second))
+				s, err := store.New(dbPath, dims)
+				if err != nil {
+					t.Fatalf("store.New: %v", err)
+				}
+				defer func() { _ = s.Close() }()
+				if err := s.SetMeta(store.MetaLastIndexError, "embed batch: no models loaded"); err != nil {
+					t.Fatalf("SetMeta: %v", err)
+				}
+			},
+			wantSpawn: true,
+		},
+		{
+			name: "ready",
+			setup: func(t *testing.T, dbPath string, _ int) {
+				writeHookTestDB(t, dbPath, time.Now().Add(-30*time.Second))
+			},
+			wantSpawn: false,
+		},
+	}
 
-	t.Run("without donor", func(t *testing.T) {
-		var bgCwd string
-		generateSessionContextInternal("/my/worktree",
-			func(_, _ string) string { return "" },
-			func(cwd string) { bgCwd = cwd },
-		)
-		if bgCwd != "/my/worktree" {
-			t.Fatalf("expected bgIndexer called even without donor, got %q", bgCwd)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			t.Setenv("XDG_DATA_HOME", tmpDir)
+			t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+			cfg, err := config.NewConfigService("")
+			if err != nil {
+				t.Fatalf("NewConfigService: %v", err)
+			}
+			if tt.setup != nil {
+				dbPath := configuredDBPath(cfg, project, newEmbedder(cfg).ModelName())
+				if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				tt.setup(t, dbPath, cfg.ServerDims(0))
+			}
+
+			var spawned []string
+			got := sessionContext(project, func(cwd string) { spawned = append(spawned, cwd) })
+
+			if got != directive {
+				t.Errorf("context = %q, want bare directive %q", got, directive)
+			}
+			if tt.wantSpawn {
+				if len(spawned) != 1 || spawned[0] != project {
+					t.Errorf("bgIndexer calls = %v, want exactly [%s]", spawned, project)
+				}
+			} else if len(spawned) != 0 {
+				t.Errorf("bgIndexer must not be called, got %v", spawned)
+			}
+		})
+	}
 }
 
-func TestGenerateSessionContextInternal_NoSpawnWhenFresh(t *testing.T) {
+func TestGenerateSessionContextInternal_ConfigErrorIsBareDirective(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := config.DefaultConfigPath()
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("servers: [unterminated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.NewConfigService(cfgPath); err == nil {
+		t.Fatal("fixture must make NewConfigService fail")
+	}
+
+	spawned := false
+	got := sessionContext("/myproject", func(string) { spawned = true })
+
+	if want := sessionStartDirective(hookHostClaude, "lumen", ""); got != want {
+		t.Errorf("context = %q, want bare directive %q", got, want)
+	}
+	if spawned {
+		t.Error("bgIndexer must not be called when the config cannot be loaded")
+	}
+}
+
+func TestGenerateSessionContextInternal_UnopenableDBIsBareDirective(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 	t.Setenv("XDG_CONFIG_HOME", tmpDir)
@@ -323,140 +425,26 @@ func TestGenerateSessionContextInternal_NoSpawnWhenFresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewConfigService: %v", err)
 	}
-	emb := newEmbedder(cfg)
-	dbPath := config.DBPathForProject("/myproject", emb.ModelName())
+	const project = "/myproject"
+	dbPath := configuredDBPath(cfg, project, newEmbedder(cfg).ModelName())
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeHookTestDB(t, dbPath, time.Now().Add(-30*time.Second))
-
-	called := false
-	generateSessionContextInternal("/myproject",
-		func(_, _ string) string { return "" },
-		func(_ string) { called = true },
-	)
-	if called {
-		t.Fatal("bgIndexer must not be called when index was recently updated")
-	}
-}
-
-func TestGenerateSessionContextInternal_ZeroChunksIsNotReady(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	cfg, err := config.NewConfigService("")
-	if err != nil {
-		t.Fatalf("NewConfigService: %v", err)
-	}
-	emb := newEmbedder(cfg)
-	dbPath := config.DBPathForProject("/myproject", emb.ModelName())
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+	if err := os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeEmptyHookTestDB(t, dbPath, time.Now().Add(-30*time.Second))
-
-	called := false
-	result := generateSessionContextInternal("/myproject",
-		func(_, _ string) string { return "" },
-		func(_ string) { called = true },
-	)
-	if !called {
-		t.Fatal("bgIndexer must be called when the index contains zero chunks")
+	if _, err := store.NewCollection(dbPath, cfg.ServerDims(0), cfg.VectorStorage(), project); err == nil {
+		t.Skip("store.NewCollection tolerates a corrupt file; cannot force the open-error path")
 	}
-	if !strings.Contains(result, "index not ready") || strings.Contains(result, "index ready") {
-		t.Fatalf("zero-chunk index must not be announced as ready: %s", result)
+
+	spawned := false
+	got := sessionContext(project, func(string) { spawned = true })
+
+	if want := sessionStartDirective(hookHostClaude, "lumen", ""); got != want {
+		t.Errorf("context = %q, want bare directive %q", got, want)
 	}
-}
-
-func TestGenerateSessionContextInternal_LastIndexFailureIsUnhealthy(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	cfg, err := config.NewConfigService("")
-	if err != nil {
-		t.Fatalf("NewConfigService: %v", err)
-	}
-	emb := newEmbedder(cfg)
-	dbPath := config.DBPathForProject("/myproject", emb.ModelName())
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeHookTestDB(t, dbPath, time.Now().Add(-30*time.Second))
-	func() {
-		s, err := store.New(dbPath, cfg.ServerDims(0))
-		if err != nil {
-			t.Fatalf("store.New: %v", err)
-		}
-		defer func() { _ = s.Close() }()
-
-		if err := s.SetMeta(store.MetaLastIndexError, "embed batch: no models loaded"); err != nil {
-			t.Fatalf("SetMeta: %v", err)
-		}
-	}()
-
-	called := false
-	result := generateSessionContextInternal("/myproject",
-		func(_, _ string) string { return "" },
-		func(_ string) { called = true },
-	)
-	if !called {
-		t.Fatal("bgIndexer must retry after a failed indexing attempt")
-	}
-	if !strings.Contains(result, "index unhealthy") || strings.Contains(result, "index ready") {
-		t.Fatalf("failed index must not be announced as ready: %s", result)
-	}
-}
-
-func TestGenerateSessionContextInternal_SpawnsWhenStale(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-
-	cfg, err := config.NewConfigService("")
-	if err != nil {
-		t.Fatalf("NewConfigService: %v", err)
-	}
-	emb := newEmbedder(cfg)
-	dbPath := config.DBPathForProject("/myproject", emb.ModelName())
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeHookTestDB(t, dbPath, time.Now().Add(-10*time.Minute))
-
-	called := false
-	generateSessionContextInternal("/myproject",
-		func(_, _ string) string { return "" },
-		func(_ string) { called = true },
-	)
-	if !called {
-		t.Fatal("bgIndexer must be called when index is stale")
-	}
-}
-
-func TestGenerateSessionContextInternal_MessageWithDonor(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-
-	result := generateSessionContextInternal("/my/worktree",
-		func(_, _ string) string { return "/some/donor.db" },
-		func(_ string) {},
-	)
-	if !strings.Contains(result, "background") {
-		t.Errorf("expected 'background' in context when donor found, got: %s", result)
-	}
-}
-
-func TestGenerateSessionContextInternal_MessageWithoutDonor(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-
-	result := generateSessionContextInternal("/my/worktree",
-		func(_, _ string) string { return "" },
-		func(_ string) {},
-	)
-	if !strings.Contains(result, "background") {
-		t.Errorf("expected 'background' in context when no donor, got: %s", result)
+	if spawned {
+		t.Error("bgIndexer must not be called when the existing DB cannot be opened")
 	}
 }
 
@@ -504,16 +492,13 @@ func TestGenerateSessionContextInternal_NormalizesToGitRoot(t *testing.T) {
 	writeHookTestDB(t, dbPath, time.Now().Add(-30*time.Second))
 
 	// Pass a subdirectory as cwd — the hook should normalize to the git root
-	// and find the existing DB.
+	// and find the existing fresh DB, so nothing is spawned.
 	subDir := filepath.Join(resolvedRepo, "sub", "deep")
-	result := generateSessionContextInternal(subDir,
-		func(_, _ string) string { return "" },
-		func(_ string) {},
-	)
+	var spawned []string
+	sessionContext(subDir, func(cwd string) { spawned = append(spawned, cwd) })
 
-	// The result should contain "index ready" because the DB exists at the git root.
-	if !strings.Contains(result, "index ready") {
-		t.Errorf("expected hook to normalize cwd to git root and find index, got: %s", result)
+	if len(spawned) != 0 {
+		t.Errorf("expected hook to normalize cwd to git root and find the index, but it spawned for %v", spawned)
 	}
 }
 
@@ -548,18 +533,16 @@ func TestGenerateSessionContextInternal_NonGitUsesParentIndex(t *testing.T) {
 	writeHookTestDB(t, dbPath, time.Now().Add(-30*time.Second))
 
 	// Pass a deep subdirectory as cwd — the hook should walk up and find
-	// the parent's index.
+	// the parent's fresh index, so nothing is spawned.
 	resolvedDeep, err := filepath.EvalSymlinks(deepDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := generateSessionContextInternal(resolvedDeep,
-		func(_, _ string) string { return "" },
-		func(_ string) {},
-	)
+	var spawned []string
+	sessionContext(resolvedDeep, func(cwd string) { spawned = append(spawned, cwd) })
 
-	if !strings.Contains(result, "index ready") {
-		t.Errorf("expected hook to walk up to parent index and find it, got: %s", result)
+	if len(spawned) != 0 {
+		t.Errorf("expected hook to walk up to the parent index, but it spawned for %v", spawned)
 	}
 }
 
@@ -569,7 +552,6 @@ func TestHookOutputJSON(t *testing.T) {
 	content := generateSessionContextInternalWithDirective(
 		sessionStartDirective(hookHostClaude, "lumen", "lumen"),
 		"/nonexistent/path",
-		func(_, _ string) string { return "" },
 		func(_ string) {},
 	)
 	out := hookOutput{
@@ -606,7 +588,6 @@ func TestSessionStartOutputCursorJSON(t *testing.T) {
 	content := generateSessionContextInternalWithDirective(
 		sessionStartDirective(hookHostCursor, "lumen", "lumen"),
 		"/nonexistent/path",
-		func(_, _ string) string { return "" },
 		func(_ string) {},
 	)
 

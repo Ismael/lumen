@@ -191,6 +191,11 @@ func TestTotalTokens(t *testing.T) {
 // of tool_use events (all named "Bash") plus optional lumen search calls.
 func writeToolCallJSONL(t *testing.T, path string, bashCalls, lumenCalls int) {
 	t.Helper()
+	writeToolCallJSONLNamed(t, path, bashCalls, lumenCalls, "mcp__lumen__semantic_search")
+}
+
+func writeToolCallJSONLNamed(t *testing.T, path string, bashCalls, lumenCalls int, lumenTool string) {
+	t.Helper()
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +207,7 @@ func writeToolCallJSONL(t *testing.T, path string, bashCalls, lumenCalls int) {
 		idx++
 	}
 	for range lumenCalls {
-		_, _ = fmt.Fprintf(f, `{"type":"tool_use","id":"tc_%d","name":"mcp__lumen__semantic_search","input":{"query":"test"}}%s`, idx, "\n")
+		_, _ = fmt.Fprintf(f, `{"type":"tool_use","id":"tc_%d","name":"%s","input":{"query":"test"}}%s`, idx, lumenTool, "\n")
 		idx++
 	}
 }
@@ -445,5 +450,39 @@ func TestGenerate_EmptyResults(t *testing.T) {
 	// Detail report should also exist
 	if _, err := os.Stat(filepath.Join(dir, "detail-report.md")); err != nil {
 		t.Errorf("detail report not created: %v", err)
+	}
+}
+
+func TestGenerateOverview_LumenUsedUnderEitherToolName(t *testing.T) {
+	for _, tool := range []string{"mcp__lumen__semantic_search", "mcp__plugin_lumen_lumen__semantic_search"} {
+		t.Run(tool, func(t *testing.T) {
+			dir := t.TempDir()
+			outPath := filepath.Join(dir, "overview.txt")
+
+			mData, _ := json.Marshal(&metrics.Metrics{CostUSD: 0.5, DurationMS: 1000})
+			_ = os.WriteFile(filepath.Join(dir, "task-1-with-lumen-metrics.json"), mData, 0o644)
+			jData, _ := json.Marshal(&judge.JudgeResult{Rating: judge.Good, FilesCorrect: true})
+			_ = os.WriteFile(filepath.Join(dir, "task-1-with-lumen-judge.json"), jData, 0o644)
+			writeToolCallJSONLNamed(t, filepath.Join(dir, "task-1-with-lumen-raw.jsonl"), 1, 2, tool)
+
+			cfg := &Config{
+				ResultsDir:  dir,
+				EmbedModel:  "test-embed",
+				ClaudeModel: "test-claude",
+				Tasks:       []task.Task{{ID: "task-1", Language: "go"}},
+				Scenarios:   []runner.Scenario{runner.WithLumen},
+				OutputPath:  outPath,
+			}
+			if err := GenerateOverview(cfg); err != nil {
+				t.Fatalf("GenerateOverview: %v", err)
+			}
+			data, err := os.ReadFile(outPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), "INVALID") {
+				t.Errorf("run with %s calls was marked INVALID:\n%s", tool, data)
+			}
+		})
 	}
 }

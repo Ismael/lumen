@@ -755,30 +755,6 @@ func (s *Store) Stats() (StoreStats, error) {
 	return stats, nil
 }
 
-// TopSymbols returns the n most frequently occurring symbol names in the store.
-func (s *Store) TopSymbols(n int) ([]string, error) {
-	if s.shared {
-		return s.sharedTopSymbols(n)
-	}
-	rows, err := s.reader().Query(
-		"SELECT symbol FROM chunks GROUP BY symbol ORDER BY count(*) DESC LIMIT ?", n,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("top symbols query: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var symbols []string
-	for rows.Next() {
-		var sym string
-		if err := rows.Scan(&sym); err != nil {
-			return nil, fmt.Errorf("scan symbol: %w", err)
-		}
-		symbols = append(symbols, sym)
-	}
-	return symbols, rows.Err()
-}
-
 // HasSentinelFiles reports whether any files have an empty hash, indicating
 // they were registered but never fully indexed (interrupted run).
 // Uses the read-only connection when available for consistency with other

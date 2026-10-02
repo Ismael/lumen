@@ -5,6 +5,15 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+
+	"github.com/aeneasr/lumen/bench-swe/internal/runner"
+)
+
+// Tool ids of lumen's semantic_search: the key-qualified id new runs record,
+// and the bare id found in older result files.
+const (
+	lumenSearchTool       = "mcp__" + runner.LumenMCPServerName + "__semantic_search"
+	legacyLumenSearchTool = "mcp__lumen__semantic_search"
 )
 
 // extractToolResultContent handles both string content and the
@@ -46,15 +55,21 @@ func (tc ToolCall) SearchPath() string {
 	return cwd
 }
 
+// IsLumenSearch reports whether the call is lumen's semantic_search under
+// either the current or the legacy server key.
+func (tc ToolCall) IsLumenSearch() bool {
+	return tc.Name == lumenSearchTool || tc.Name == legacyLumenSearchTool
+}
+
 // HasLumenSearch returns true if the raw JSONL file contains at least one
-// mcp__lumen__semantic_search tool call.
+// lumen semantic_search tool call.
 func HasLumenSearch(rawPath string) (bool, error) {
 	calls, err := ExtractToolCalls(rawPath)
 	if err != nil {
 		return false, err
 	}
 	for _, tc := range calls {
-		if tc.Name == "mcp__lumen__semantic_search" {
+		if tc.IsLumenSearch() {
 			return true, nil
 		}
 	}

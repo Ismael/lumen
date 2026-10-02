@@ -26,7 +26,7 @@ var extractCmd = &cobra.Command{
 
 func init() {
 	extractCmd.Flags().BoolVar(&extractJSON, "json", false, "Output machine-readable JSON")
-	extractCmd.Flags().BoolVar(&extractSearchOnly, "search-only", false, "Only show mcp__lumen__semantic_search calls")
+	extractCmd.Flags().BoolVar(&extractSearchOnly, "search-only", false, "Only show lumen semantic_search calls")
 }
 
 func runExtract(_ *cobra.Command, args []string) error {
@@ -40,7 +40,7 @@ func runExtract(_ *cobra.Command, args []string) error {
 	if extractSearchOnly {
 		var filtered []analysis.ToolCall
 		for _, c := range calls {
-			if c.Name == "mcp__lumen__semantic_search" {
+			if c.IsLumenSearch() {
 				filtered = append(filtered, c)
 			}
 		}
@@ -56,7 +56,7 @@ func runExtract(_ *cobra.Command, args []string) error {
 func outputJSON(calls []analysis.ToolCall) error {
 	searchCount := 0
 	for _, c := range calls {
-		if c.Name == "mcp__lumen__semantic_search" {
+		if c.IsLumenSearch() {
 			searchCount++
 		}
 	}
@@ -80,7 +80,7 @@ func outputText(calls []analysis.ToolCall) error {
 	searchCount := 0
 
 	for _, c := range calls {
-		isSearch := c.Name == "mcp__lumen__semantic_search"
+		isSearch := c.IsLumenSearch()
 		if isSearch {
 			searchCount++
 		}

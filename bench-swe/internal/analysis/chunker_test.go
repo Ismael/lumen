@@ -252,3 +252,19 @@ func TestExtractSearchCalls(t *testing.T) {
 		}
 	})
 }
+
+func TestExtractSearchCalls_PluginQualifiedName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "raw.jsonl")
+	content := `{"type":"tool_use","id":"tu1","name":"mcp__plugin_lumen_lumen__semantic_search","input":{"query":"CORS","cwd":"/repo"}}
+{"type":"tool_result","tool_use_id":"tu1","content":"result text"}`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := extractSearchCalls(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Query != "CORS" || calls[0].CWD != "/repo" {
+		t.Fatalf("got %+v, want one call with query CORS and cwd /repo", calls)
+	}
+}
