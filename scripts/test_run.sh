@@ -388,6 +388,214 @@ FAKECURL
 ) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
 
 echo ""
+echo "=== build-from-source fallback tests ==="
+
+# Each case runs the launcher against a throwaway package root with stubbed
+# `go` and `curl` on a minimal PATH; no real build or network access happens.
+# Version in the root's manifest is 0.0.1; the source-build stamp is
+# bin/lumen.source-version.
+_BF_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+_BF_ARCH_RAW="$(uname -m)"
+case "$_BF_ARCH_RAW" in x86_64) _BF_ARCH="amd64" ;; aarch64) _BF_ARCH="arm64" ;; *) _BF_ARCH="$_BF_ARCH_RAW" ;; esac
+
+# bf_stage <root> <stubs> <with_go_mod> <go_mode:ok|fail|slow|none>
+bf_stage() {
+  local root="$1" stubs="$2" with_mod="$3" go_mode="$4"
+  printf '{\n  ".": "0.0.1"\n}\n' > "${root}/.release-please-manifest.json"
+  if [ "$with_mod" = "1" ]; then printf 'module example.com/lumen\n' > "${root}/go.mod"; fi
+
+  case "$go_mode" in
+    ok|slow)
+      cat > "${stubs}/go" <<'FAKEGO'
+#!/usr/bin/env bash
+{ echo "pwd=$(pwd)"; echo "cgo=${CGO_ENABLED:-}"; echo "args=$*"; echo "started"; } >> "$STUB_LOG"
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac
+done
+if [ "${STUB_GO_SLEEP:-0}" != "0" ]; then sleep "$STUB_GO_SLEEP"; fi
+echo "build output on stdout"
+printf '#!/usr/bin/env bash\necho built-binary-ran\n' > "$out"
+chmod +x "$out"
+FAKEGO
+      ;;
+    fail)
+      cat > "${stubs}/go" <<'FAKEGO'
+#!/usr/bin/env bash
+echo "go $*" >> "$STUB_LOG"
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac
+done
+printf 'partial' > "$out"
+echo "compile error"
+exit 1
+FAKEGO
+      ;;
+  esac
+  if [ -f "${stubs}/go" ]; then chmod +x "${stubs}/go"; fi
+
+  cat > "${stubs}/curl" <<'FAKECURL'
+#!/usr/bin/env bash
+echo "curl $*" >> "$STUB_LOG"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) mkdir -p "$(dirname "$2")"; printf '#!/usr/bin/env bash\necho downloaded-binary-ran\n' > "$2"; chmod +x "$2"; shift 2 ;;
+    *)  shift ;;
+  esac
+done
+exit 0
+FAKECURL
+  chmod +x "${stubs}/curl"
+
+  local tool
+  for tool in bash env uname tr dirname grep sed cat mkdir rm mv mktemp chmod sleep; do
+    ln -sf "$(command -v "$tool")" "${stubs}/$tool"
+  done
+}
+
+# bf_old_binary <path>: an executable that identifies itself as a previous build.
+bf_old_binary() {
+  mkdir -p "$(dirname "$1")"
+  printf '#!/usr/bin/env bash\necho old-binary-ran\n' > "$1"
+  chmod +x "$1"
+}
+
+# bf_listing <dir>: sorted, space-separated names (portable; no wc padding).
+bf_listing() {
+  if [ -d "$1" ]; then (cd "$1" && ls -A | sort | tr '\n' ' '); fi
+}
+
+# build_case <name> <with_go_mod:0|1> <go_mode> <setup>
+# setup: none | stale-stamp | no-stamp | matching-stamp | downloaded | old-lumen
+build_case() {
+  local name="$1" with_mod="$2" go_mode="$3" setup="$4"
+  (
+    _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    _ROOT="$(mktemp -d)"
+    _STUBS="$(mktemp -d)"
+    _LOG="${_ROOT}.log"
+    trap 'rm -rf "$_ROOT" "$_STUBS" "$_LOG" "${_ROOT}.err"' EXIT
+
+    bf_stage "$_ROOT" "$_STUBS" "$with_mod" "$go_mode"
+    case "$setup" in
+      stale-stamp)    bf_old_binary "${_ROOT}/bin/lumen"; echo "0.0.0" > "${_ROOT}/bin/lumen.source-version" ;;
+      no-stamp|old-lumen) bf_old_binary "${_ROOT}/bin/lumen" ;;
+      matching-stamp) bf_old_binary "${_ROOT}/bin/lumen"; echo "0.0.1" > "${_ROOT}/bin/lumen.source-version" ;;
+      downloaded)     bf_old_binary "${_ROOT}/bin/lumen-${_BF_OS}-${_BF_ARCH}" ;;
+    esac
+
+    : > "$_LOG"
+    _OUT="$(env -u PLUGIN_DATA -u PLUGIN_ROOT -u CURSOR_PLUGIN_ROOT \
+      CLAUDE_PLUGIN_ROOT="$_ROOT" STUB_LOG="$_LOG" PATH="$_STUBS" \
+      bash "${_SCRIPT_DIR}/run" stdio 2>"${_ROOT}.err")" || { echo "  FAIL: ${name}: launcher exited non-zero"; sed 's/^/          /' "${_ROOT}.err"; exit 1; }
+    _ERR="$(cat "${_ROOT}.err")"
+    _LOGTXT="$(cat "$_LOG")"
+    _LIST="$(bf_listing "${_ROOT}/bin")"
+
+    expect_out() { [ "$_OUT" = "$1" ] || { echo "  FAIL: ${name}: stdout was '${_OUT}', want '$1'"; exit 1; }; }
+    expect_log() { echo "$_LOGTXT" | grep -q -- "$1" || { echo "  FAIL: ${name}: log missing '$1': $_LOGTXT"; exit 1; }; }
+    expect_no_log() { if echo "$_LOGTXT" | grep -q -- "$1"; then echo "  FAIL: ${name}: log unexpectedly has '$1'"; exit 1; fi; }
+    expect_list() { [ "$_LIST" = "$1" ] || { echo "  FAIL: ${name}: bin/ is '${_LIST}', want '$1'"; exit 1; }; }
+    expect_stamp() { [ "$(cat "${_ROOT}/bin/lumen.source-version" 2>/dev/null)" = "$1" ] || { echo "  FAIL: ${name}: stamp is '$(cat "${_ROOT}/bin/lumen.source-version" 2>/dev/null)', want '$1'"; exit 1; }; }
+
+    case "$name" in
+      build-succeeds)
+        expect_out "built-binary-ran"
+        expect_no_log "^curl"
+        expect_log "^pwd=${_ROOT}$"
+        expect_log "^cgo=1$"
+        expect_log "^args=build -tags=fts5 -buildvcs=false -ldflags=-X github.com/ory/lumen/cmd.buildVersion=0.0.1 -o ${_ROOT}/bin/\.[^ ]* \.$"
+        expect_list "lumen lumen.source-version "
+        expect_stamp "0.0.1"
+        echo "$_ERR" | grep -q "build output on stdout" || { echo "  FAIL: ${name}: go stdout not redirected to stderr"; exit 1; }
+        ;;
+      build-fails)
+        expect_out "downloaded-binary-ran"
+        expect_log "^go build"
+        expect_log "^curl"
+        expect_list "lumen-${_BF_OS}-${_BF_ARCH} "
+        ;;
+      no-go-mod|no-go)
+        expect_out "downloaded-binary-ran"
+        expect_no_log "^go "
+        expect_no_log "^started"
+        ;;
+      stale-stamp|no-stamp)
+        expect_out "built-binary-ran"
+        expect_log "^started"
+        expect_no_log "^curl"
+        expect_list "lumen lumen.source-version "
+        expect_stamp "0.0.1"
+        ;;
+      matching-stamp)
+        expect_out "old-binary-ran"
+        expect_no_log "^started"
+        expect_no_log "^curl"
+        ;;
+      downloaded-candidate)
+        expect_out "built-binary-ran"
+        expect_no_log "^curl"
+        expect_list "lumen lumen-${_BF_OS}-${_BF_ARCH} lumen.source-version "
+        ;;
+      no-go-old-lumen)
+        expect_out "old-binary-ran"
+        expect_no_log "^curl"
+        expect_list "lumen "
+        ;;
+      build-fails-stale)
+        expect_out "old-binary-ran"
+        expect_log "^go build"
+        expect_no_log "^curl"
+        expect_list "lumen lumen.source-version "
+        expect_stamp "0.0.0"
+        ;;
+    esac
+    echo "  PASS: ${name}"
+  ) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+}
+
+build_case build-succeeds       1 ok   none
+build_case build-fails          1 fail none
+build_case no-go-mod            0 ok   none
+build_case no-go                1 none none
+build_case stale-stamp          1 ok   stale-stamp
+build_case no-stamp             1 ok   no-stamp
+build_case matching-stamp       1 ok   matching-stamp
+build_case downloaded-candidate 1 ok   downloaded
+build_case no-go-old-lumen      1 none old-lumen
+build_case build-fails-stale    1 fail stale-stamp
+
+# An interrupted launcher must not leave its temp build file behind.
+(
+  _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  _ROOT="$(mktemp -d)"
+  _STUBS="$(mktemp -d)"
+  _LOG="${_ROOT}.log"
+  trap 'rm -rf "$_ROOT" "$_STUBS" "$_LOG"' EXIT
+  bf_stage "$_ROOT" "$_STUBS" 1 slow
+  : > "$_LOG"
+
+  env -u PLUGIN_DATA -u PLUGIN_ROOT -u CURSOR_PLUGIN_ROOT \
+    CLAUDE_PLUGIN_ROOT="$_ROOT" STUB_LOG="$_LOG" STUB_GO_SLEEP=1 PATH="$_STUBS" \
+    bash "${_SCRIPT_DIR}/run" stdio >/dev/null 2>&1 &
+  _PID=$!
+  for _ in $(seq 1 50); do
+    grep -q '^started' "$_LOG" && break
+    sleep 0.1
+  done
+  kill -TERM "$_PID" 2>/dev/null || true
+  wait "$_PID" 2>/dev/null || true
+
+  _LIST="$(bf_listing "${_ROOT}/bin")"
+  if [ -n "$_LIST" ]; then
+    echo "  FAIL: interrupted-build: bin/ not cleaned up: '${_LIST}'"
+    exit 1
+  fi
+  echo "  PASS: interrupted-build"
+) && PASS=$((PASS + 1)) || FAIL=$((FAIL + 1))
+
+echo ""
 echo "=== summary ==="
 echo "  passed: $PASS"
 echo "  failed: $FAIL"

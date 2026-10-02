@@ -1,6 +1,7 @@
 ---
 name: doctor
 description: Run a health check on the bundled Lumen semantic search setup for the current project, verify backend reachability and index freshness, and summarize remediation steps.
+disable-model-invocation: true
 ---
 
 # Lumen Doctor

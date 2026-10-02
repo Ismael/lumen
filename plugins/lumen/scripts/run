@@ -15,17 +15,68 @@ case "$ARCH" in
   aarch64) ARCH="arm64" ;;
 esac
 
-# Find binary: check bin/ first, then goreleaser dist/ output, then download
+# Building from source needs a Go toolchain, the repo's go.mod and a readable
+# manifest version. Git-based installs ship the source but no binary (bin/ is
+# gitignored), and a bin/lumen carried over from an older revision must not be
+# trusted, so a source build is stamped with the version it was built from.
 BINARY=""
-for candidate in \
-  "${PACKAGE_ROOT}/bin/lumen" \
-  "${PACKAGE_ROOT}/bin/lumen-${OS}-${ARCH}" \
-  "${BINARY_ROOT}/bin/lumen-${OS}-${ARCH}"; do
-  if [ -x "$candidate" ]; then
-    BINARY="$candidate"
-    break
+CAN_BUILD=0
+SRC_VERSION=""
+SRC_MANIFEST="${PACKAGE_ROOT}/.release-please-manifest.json"
+if command -v go >/dev/null 2>&1 && [ -f "${PACKAGE_ROOT}/go.mod" ] && [ -f "$SRC_MANIFEST" ]; then
+  SRC_VERSION="$(grep '"[.]"' "$SRC_MANIFEST" | sed 's/.*"[^"]*"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)"
+  if [ -n "$SRC_VERSION" ]; then CAN_BUILD=1; fi
+fi
+SOURCE_BINARY="${PACKAGE_ROOT}/bin/lumen"
+SOURCE_STAMP="${PACKAGE_ROOT}/bin/lumen.source-version"
+
+if [ "$CAN_BUILD" = 1 ] && [ -x "$SOURCE_BINARY" ] && [ "$(cat "$SOURCE_STAMP" 2>/dev/null || true)" = "$SRC_VERSION" ]; then
+  BINARY="$SOURCE_BINARY"
+fi
+
+# The build goes to a temp file and is renamed into place, binary first and stamp
+# second, so concurrent launches never exec a half-written binary or trust a stamp
+# without its binary. Output goes to stderr: stdout is the MCP channel.
+if [ -z "$BINARY" ] && [ "$CAN_BUILD" = 1 ]; then
+  BUILD_TMP=""
+  STAMP_TMP=""
+  cleanup_build() { rm -f "$BUILD_TMP" "$STAMP_TMP"; }
+  trap cleanup_build EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  echo "Building lumen ${SRC_VERSION} from source at ${PACKAGE_ROOT}..." >&2
+  if mkdir -p "${PACKAGE_ROOT}/bin" \
+    && BUILD_TMP="$(mktemp "${PACKAGE_ROOT}/bin/.lumen-build.XXXXXX")" \
+    && (cd "${PACKAGE_ROOT}" && CGO_ENABLED=1 go build -tags=fts5 -buildvcs=false \
+      -ldflags="-X github.com/ory/lumen/cmd.buildVersion=${SRC_VERSION}" -o "$BUILD_TMP" .) >&2 \
+    && chmod +x "$BUILD_TMP" \
+    && mv -f "$BUILD_TMP" "$SOURCE_BINARY"; then
+    BUILD_TMP=""
+    BINARY="$SOURCE_BINARY"
+    if STAMP_TMP="$(mktemp "${PACKAGE_ROOT}/bin/.lumen-stamp.XXXXXX")" \
+      && printf '%s\n' "$SRC_VERSION" > "$STAMP_TMP" \
+      && mv -f "$STAMP_TMP" "$SOURCE_STAMP"; then
+      STAMP_TMP=""
+    fi
+  else
+    echo "Build from source failed; falling back to any existing binary or release download" >&2
   fi
-done
+  cleanup_build
+  trap - EXIT INT TERM
+fi
+
+# Find binary: check bin/ first, then goreleaser dist/ output, then download
+if [ -z "$BINARY" ]; then
+  for candidate in \
+    "${PACKAGE_ROOT}/bin/lumen" \
+    "${PACKAGE_ROOT}/bin/lumen-${OS}-${ARCH}" \
+    "${BINARY_ROOT}/bin/lumen-${OS}-${ARCH}"; do
+    if [ -x "$candidate" ]; then
+      BINARY="$candidate"
+      break
+    fi
+  done
+fi
 
 # Download on first run if no binary found
 if [ -z "$BINARY" ]; then

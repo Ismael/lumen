@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "ismael-lumen",
+  "owner": {
+    "name": "Ismael Garrido",
+    "email": "ismaelgfk@gmail.com"
+  },
+  "description": "Personal fork marketplace for the lumen semantic code search plugin.",
+  "plugins": [
+    {
+      "name": "lumen",
+      "source": "./",
+      "description": "Precise local semantic code search via MCP. Indexes your codebase with Go AST parsing, embeds with Ollama or LM Studio, and exposes vector search to Claude through an MCP server.",
+      "author": {
+        "name": "Ismael Garrido"
+      }
+    }
+  ]
+}
