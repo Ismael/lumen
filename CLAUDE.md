@@ -111,11 +111,30 @@ make build-local
 claude --plugin-dir .
 ```
 
-This loads lumen as a Claude Code plugin directly from the repo. The plugin
-system handles MCP registration, hooks, and skills declaratively via:
+This loads lumen as a Claude Code plugin directly from the repo. Installing
+from the fork marketplace (`.claude-plugin/marketplace.json`, plugin
+`lumen@ismael-lumen`) works the same way. `scripts/run` builds lumen from
+source (`CGO_ENABLED=1 go build -tags=fts5`, so a Go toolchain with CGO is
+required) into `bin/lumen`, skipped when `bin/lumen.source-version` matches the
+checkout's version. If the build is impossible or fails, it falls through to any
+existing binary (`bin/lumen`, `bin/lumen-<os>-<arch>`) and only then downloads
+upstream's release binary, which lacks the fork's `lumen status` and
+EnterWorktree hook. The Windows launcher never builds from source.
+`make build-local` writes no `bin/lumen.source-version` stamp, so unless one is
+left from an earlier launcher build, `scripts/run` rebuilds `bin/lumen` once on
+the first `--plugin-dir` launch.
+
+The plugin system handles MCP registration, hooks, and skills declaratively
+via:
 
 - `.claude-plugin/plugin.json` — plugin manifest
-- `hooks/hooks.json` — SessionStart + PreToolUse hooks
+- `hooks/hooks.json` — SessionStart hook (`lumen hook session-start`, prints
+  only the semantic-search directive and pre-warms the index in the background
+  when it is missing, incomplete, failed or last indexed over 5 minutes ago;
+  that is an age check, not `lumen status`'s Merkle staleness) and a
+  PostToolUse hook matching `EnterWorktree` (`lumen hook enter-worktree`,
+  timeout 45) that indexes the entered worktree and waits up to 30s. No
+  PreToolUse hook is registered; the `pre-tool-use` subcommand is unused.
 - `skills/` — `/lumen:doctor` and `/lumen:reindex` skills
 
 Cursor and OpenCode reuse the repo-root `skills/`, `hooks/`, and `scripts/`
@@ -157,8 +176,10 @@ their repo-root counterparts. Install-specific entrypoints live in `.codex/`,
 ├── cmd/
 │   ├── root.go         # Cobra root command
 │   ├── stdio.go        # MCP server
-│   ├── hook.go         # Hook handlers
+│   ├── hook.go         # Hook handlers (SessionStart, unused pre-tool-use)
+│   ├── hook_enter_worktree.go # PostToolUse EnterWorktree hook
 │   ├── clean.go        # Age-based index data cleanup
+│   ├── status.go       # Read-only embedding-service and index report
 │   └── index.go        # CLI indexing
 ├── internal/
 │   ├── config/         # Config loading & paths
@@ -175,13 +196,15 @@ their repo-root counterparts. Install-specific entrypoints live in `.codex/`,
 
 Lumen has two execution contexts with distinct output strategies:
 
-**Interactive** (`lumen index`, `lumen clean`, `lumen search`):
+**Interactive** (`lumen index`, `lumen clean`, `lumen search`, `lumen status`):
+
 - Progress and status → `tui.Progress` (pterm) on **stderr**
 - Completion summaries → `fmt.Printf` on **stdout**
 - Errors → `fmt.Fprintf(os.Stderr, ...)`
 
 **Background / MCP** (`lumen stdio` MCP server, background indexer spawned by
-SessionStart hook):
+SessionStart hook, `lumen hook enter-worktree`):
+
 - All output → `slog` (JSON) → `~/.local/share/lumen/debug.log`
 - Use `newDebugLogger()` from `cmd/log.go` — opens the log file; falls back to
   stderr only if the file cannot be created

@@ -56,8 +56,9 @@ cd bench-swe && go build -o bench-swe . && ./bench-swe extract <results-dir>/<sc
 ```
 
 This prints all tool calls in sequence, highlighting
-`mcp__lumen__semantic_search` calls with their query and result preview, plus a
-validation summary.
+`mcp__plugin_lumen_lumen__semantic_search` calls (the plugin-installed name;
+the legacy `mcp__lumen__semantic_search` is matched too) with their query and
+result preview, plus a validation summary.
 
 Use `--search-only` to filter to just semantic_search calls, or `--json` for
 machine-readable output that can be piped to other tools.

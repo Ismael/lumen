@@ -45,9 +45,12 @@ run yourself.
 - [Supported languages](#supported-languages)
 - [Configuration](#configuration)
   - [Supported embedding models](#supported-embedding-models)
+  - [Selecting a server per invocation](#selecting-a-server-per-invocation)
+  - [Using a custom or unlisted model](#using-a-custom-or-unlisted-model)
 - [Controlling what gets indexed](#controlling-what-gets-indexed)
 - [Database location](#database-location)
 - [CLI Reference](#cli-reference)
+  - [Claude Code hooks](#claude-code-hooks)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 
@@ -94,6 +97,25 @@ in this repository and is ready for Cursor's plugin distribution workflow.
 ```
 
 Verify by starting a new Claude session and running `/lumen:doctor`.
+
+**Claude Code (fork marketplace)**
+
+This fork adds [`lumen status`](#cli-reference) and the worktree-aware
+[Claude Code hooks](#claude-code-hooks). It installs from its own marketplace
+(`.claude-plugin/marketplace.json`):
+
+```bash
+/plugin marketplace add Ismael/lumen
+/plugin install lumen@ismael-lumen
+```
+
+This install needs a Go toolchain with CGO (`CGO_ENABLED=1` and a C compiler).
+The `scripts/run` launcher first builds lumen from source (`-tags=fts5`) into
+`bin/`, unless `bin/lumen.source-version` already matches the checkout's
+version. If the build is impossible or fails (no Go, no C compiler), it uses any
+binary already present, and only then downloads upstream's release binary. An
+older or downloaded binary lacks these features. The Windows launcher
+(`scripts/run.cmd`) never builds from source.
 
 **Cursor**
 
@@ -159,7 +181,8 @@ opencode mcp list
 On first Claude Code or Cursor session start, Lumen:
 
 1. Downloads the binary automatically from the
-   [latest GitHub release](https://github.com/ory/lumen/releases)
+   [latest GitHub release](https://github.com/ory/lumen/releases) (the fork
+   marketplace install builds it from source instead; see above)
 2. Indexes your project in the background using Merkle tree change detection
 3. Registers a `semantic_search` MCP tool that the host can use automatically
 
@@ -397,8 +420,9 @@ lumen clean --days 7   # tighten the cutoff to a week
 lumen clean --days 0   # remove every eligible index except actively locked indexes
 ```
 
-An index counts as used every time Lumen opens it (search, indexing, status, or
-session start), so indexes for projects you still work on are never removed.
+An index counts as used every time Lumen opens it (search, indexing, the
+`index_status` MCP tool, or session start; the read-only `lumen status` does not
+count), so indexes for projects you still work on are never removed.
 Indexes with an indexer currently running are always kept.
 
 **Git worktrees** are detected automatically. A new worktree attaches unchanged
@@ -420,6 +444,63 @@ install it automatically.
 ```bash
 lumen help
 ```
+
+**`lumen status [path]`** reports embedding-service health and index state
+without changing the index. `path` defaults to the current directory and is
+normalized to the git repository root (or an existing ancestor index), so the
+report covers the index that searches use. Example:
+
+```text
+Embedding service: OK (ollama, http://localhost:11434, ordis/jina-embeddings-v2-base-code)
+Index: /home/me/project
+  Files: 1,204 | Indexed: 1,204 | Chunks: 9,871 | Model: ordis/jina-embeddings-v2-base-code (768d, int8, 512 tok)
+  Last indexed: 2026-10-01T09:12:44Z | Stale: no | Indexing now: no
+  Last error: —
+Collection: ~/.local/share/lumen/<profile-hash>/index.db (shared by 2 worktrees)
+  Unique vectors: 10,000 | Shared refs: 15,000 | Dedup: 60.0%
+  DB size: 48 MB | Reclaimable: 1.2 MB
+  Worktrees: project (now), project-feature (2h ago)
+```
+
+- One `Embedding service` line per configured server (`OK` or `ERROR` with the
+  reason).
+- The `Index` line reads `not indexed`, `legacy index` (migrates on the next
+  index or search) or `unreadable` when no usable index exists.
+  `Stale` compares the Merkle hash of every file in the project, so it takes a
+  moment on large trees. `Indexing now` is `yes` while this worktree's project
+  lock is held or cleanup (`lumen clean`) holds the collection lock exclusively;
+  indexers of other worktrees do not count.
+- The `Collection` block covers everything the project's worktrees share (see
+  [Index storage and lifecycle](docs/INDEX_STORAGE.md#reading-index_status)).
+  It is shown when the collection database exists and is readable, even if this
+  worktree has no index in it yet; it is omitted for a legacy or unreadable
+  database.
+- The command is read-only: it never indexes, never changes index contents (no
+  database, project membership or meta rows are created), and does not refresh
+  access times.
+- Exit code is 0 when at least one embedding server is usable, whatever the
+  index state, and 1 otherwise. `--model` and `--backend` select the server the
+  same way they do for `lumen index`.
+
+### Claude Code hooks
+
+`hooks/hooks.json` registers two hooks:
+
+- **SessionStart** prints only the directive to use `semantic_search` before
+  Grep, Bash or Read. It also starts background indexing when the worktree's
+  index is missing, incomplete, failed its last run, or was last indexed more
+  than 5 minutes ago (an age check, unlike the content comparison behind
+  `lumen status`'s `Stale`), so indexing gets started early and is usually
+  ready by the first search.
+- **PostToolUse** on `EnterWorktree` (`lumen hook enter-worktree`, 45s hook
+  timeout) starts the indexer for the worktree Claude just entered and waits up
+  to 30s for it, any other indexer of that worktree, and `lumen clean` to
+  finish. A slower index keeps building in the background. The hook never fails
+  the `EnterWorktree` call and prints nothing; it logs to
+  `~/.local/share/lumen/debug.log`.
+
+There is no PreToolUse hook: Grep calls are not intercepted. The
+`lumen hook pre-tool-use` subcommand still exists but is not registered.
 
 ## Troubleshooting
 

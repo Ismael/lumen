@@ -142,8 +142,9 @@ references. It incrementally vacuums free SQLite pages. The collection directory
 is deleted when no projects remain. Legacy index directories use the same age
 policy.
 
-Opening a project for search, indexing, status, or session startup refreshes its
-access time. An active indexer lock prevents cleanup from deleting a collection
+Opening a project for search, indexing, the MCP `index_status` tool, or session
+startup refreshes its access time. The `lumen status` command is read-only and
+does not. An active indexer lock prevents cleanup from deleting a collection
 being written.
 
 The MCP server also performs this cleanup on startup, throttled to at most once
