@@ -829,7 +829,7 @@ func Hello() {}
 	}
 	// Build the expected real hash using the Merkle tree so the test stays
 	// independent of hash implementation details.
-	curTree, treeErr := merkle.BuildTree(projectDir, makeSkip(projectDir))
+	curTree, treeErr := merkle.BuildTree(projectDir, MakeSkip(projectDir))
 	if treeErr != nil {
 		t.Fatal(treeErr)
 	}

@@ -172,9 +172,9 @@ func (idx *Indexer) Close() error {
 	return idx.store.Close()
 }
 
-// makeSkip returns a SkipFunc for projectDir that excludes internal worktrees
+// MakeSkip returns a SkipFunc for projectDir that excludes internal worktrees
 // and, when projectDir is not itself a git repository, any nested git repos.
-func makeSkip(projectDir string) merkle.SkipFunc {
+func MakeSkip(projectDir string) merkle.SkipFunc {
 	extraSkip := git.InternalWorktreePaths(projectDir)
 	if !git.IsGitRoot(projectDir) {
 		for _, repoPath := range git.DiscoverNestedGitRepos(projectDir) {
@@ -190,7 +190,7 @@ func makeSkip(projectDir string) merkle.SkipFunc {
 // re-indexed regardless of whether they have changed.
 func (idx *Indexer) Index(ctx context.Context, projectDir string, force bool, progress ProgressFunc) (Stats, error) {
 	// Build tree outside the lock: it is read-only and can be slow for large projects.
-	curTree, err := merkle.BuildTree(projectDir, makeSkip(projectDir))
+	curTree, err := merkle.BuildTree(projectDir, MakeSkip(projectDir))
 	if err != nil {
 		return Stats{}, fmt.Errorf("build merkle tree: %w", err)
 	}
@@ -266,7 +266,7 @@ func (idx *Indexer) Index(ctx context.Context, projectDir string, force bool, pr
 // Returns whether a re-index occurred, the stats, and any error.
 func (idx *Indexer) EnsureFresh(ctx context.Context, projectDir string, progress ProgressFunc) (bool, Stats, error) {
 	// Build tree outside the lock: it is read-only and can be slow for large projects.
-	curTree, err := merkle.BuildTree(projectDir, makeSkip(projectDir))
+	curTree, err := merkle.BuildTree(projectDir, MakeSkip(projectDir))
 	if err != nil {
 		return false, Stats{}, fmt.Errorf("build merkle tree: %w", err)
 	}
@@ -610,7 +610,7 @@ func (idx *Indexer) LastIndexedAt(projectDir string) (time.Time, bool) {
 // IsFresh does not acquire the indexer mutex; it reads through the store's
 // read-only connection (SQLite WAL isolation).
 func (idx *Indexer) IsFresh(projectDir string) (bool, error) {
-	curTree, err := merkle.BuildTree(projectDir, makeSkip(projectDir))
+	curTree, err := merkle.BuildTree(projectDir, MakeSkip(projectDir))
 	if err != nil {
 		return false, fmt.Errorf("build merkle tree: %w", err)
 	}

@@ -231,11 +231,7 @@ func (s *Store) UseProject(projectPath string) error {
 	if !s.shared {
 		return nil
 	}
-	if projectPath == "" {
-		projectPath = ":default"
-	} else if abs, err := filepath.Abs(projectPath); err == nil {
-		projectPath = filepath.Clean(abs)
-	}
+	projectPath = normalizeProjectPath(projectPath)
 	if s.projectID != 0 && s.projectPath == projectPath {
 		s.stampSharedAccess()
 		return nil
@@ -259,6 +255,18 @@ func (s *Store) UseProject(projectPath string) error {
 	}
 	s.projectPath = projectPath
 	return nil
+}
+
+// normalizeProjectPath returns the key a project is stored under in
+// projects.path.
+func normalizeProjectPath(projectPath string) string {
+	if projectPath == "" {
+		return ":default"
+	}
+	if abs, err := filepath.Abs(projectPath); err == nil {
+		return filepath.Clean(abs)
+	}
+	return projectPath
 }
 
 // stampSharedAccess is best-effort and deliberately uses a short-lived
@@ -881,10 +889,16 @@ func (s *Store) CollectionStats() (CollectionStats, error) {
 }
 
 func (s *Store) sharedHasSentinelFiles() (bool, error) {
+	return projectHasSentinelFiles(s.reader(), s.projectID)
+}
+
+func projectHasSentinelFiles(q interface {
+	QueryRow(query string, args ...any) *sql.Row
+}, projectID int64) (bool, error) {
 	var exists bool
-	err := s.reader().QueryRow(`SELECT EXISTS(
+	err := q.QueryRow(`SELECT EXISTS(
 		SELECT 1 FROM project_files pf JOIN file_revisions fr ON fr.id = pf.file_revision_id
-		WHERE pf.project_id = ? AND fr.complete = 0)`, s.projectID).Scan(&exists)
+		WHERE pf.project_id = ? AND fr.complete = 0)`, projectID).Scan(&exists)
 	return exists, err
 }
 
