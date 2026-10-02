@@ -30,9 +30,22 @@ import (
 // Errors are silently ignored: background indexing is best-effort. If it
 // fails, the MCP server falls back to its normal lazy EnsureFresh path.
 func spawnBackgroundIndexer(projectPath string) {
-	exe, err := os.Executable()
+	cmd, err := startBackgroundIndexer(projectPath)
 	if err != nil {
 		return
+	}
+	// Reap the child to avoid a zombie process entry. The goroutine exits
+	// when the detached indexer terminates.
+	go func() { _ = cmd.Wait() }()
+}
+
+// startBackgroundIndexer starts the same detached indexer as
+// spawnBackgroundIndexer and returns it so the caller can wait on (and must
+// eventually reap) the child.
+func startBackgroundIndexer(projectPath string) (*exec.Cmd, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
 	}
 	cmd := exec.Command(exe, "index", projectPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -43,9 +56,7 @@ func spawnBackgroundIndexer(projectPath string) {
 	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
-		return
+		return nil, err
 	}
-	// Reap the child to avoid a zombie process entry. The goroutine exits
-	// when the detached indexer terminates (or immediately if Start failed).
-	go func() { _ = cmd.Wait() }()
+	return cmd, nil
 }

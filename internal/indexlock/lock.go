@@ -89,26 +89,33 @@ func TryAcquireShared(lockPath string) (*Lock, error) {
 }
 
 // IsHeld reports whether another process currently holds an exclusive lock on
-// lockPath. Returns true on any error (fail-closed: callers skip work rather
-// than risk concurrent writes). Does NOT create the lock file — if it doesn't
-// exist, no process holds it.
+// lockPath. A lock file that cannot be stat'ed (including a missing one) is
+// reported as not held; an error from the lock probe itself is reported as
+// held (fail-closed: callers skip work rather than risk concurrent writes).
+// Does NOT create the lock file.
 func IsHeld(lockPath string) bool {
+	held, err := ExclusivelyHeld(lockPath)
+	return held || err != nil
+}
+
+// ExclusivelyHeld is IsHeld with probe errors returned instead of reported as
+// held. A lock file that cannot be stat'ed is reported as not held.
+func ExclusivelyHeld(lockPath string) (bool, error) {
 	if _, err := os.Stat(lockPath); err != nil {
-		return false // file doesn't exist → no indexer running
+		return false, nil // file doesn't exist → no indexer running
 	}
 	fl := flock.New(lockPath)
 	locked, err := fl.TryRLock()
 	if err != nil {
-		// Could not acquire shared lock → exclusive lock is held by another process.
-		return true
+		return false, err
 	}
 	if !locked {
 		// TryRLock returned false without error → exclusive lock held.
-		return true
+		return true, nil
 	}
 	// Shared lock succeeded → no exclusive lock held. Release immediately.
 	_ = fl.Unlock()
-	return false
+	return false, nil
 }
 
 // IsAnyHeld reports whether lockPath has either shared or exclusive holders.

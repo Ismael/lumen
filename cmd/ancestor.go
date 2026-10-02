@@ -19,8 +19,22 @@ import (
 	"path/filepath"
 
 	"github.com/ory/lumen/internal/config"
+	"github.com/ory/lumen/internal/git"
 	"github.com/ory/lumen/internal/merkle"
 )
+
+// resolveProjectRoot normalises path to the project root that owns its index:
+// the git repository root, else (outside git) an ancestor that already has an
+// index, else path itself.
+func resolveProjectRoot(path, model string) string {
+	if root, err := git.RepoRoot(path); err == nil {
+		return root
+	}
+	if ancestor := findAncestorIndex(path, model); ancestor != "" {
+		return ancestor
+	}
+	return path
+}
 
 // findAncestorIndex walks up from path's parent directory, checking whether
 // any ancestor has an existing lumen index DB on disk. Returns the ancestor

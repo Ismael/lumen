@@ -119,6 +119,73 @@ func TestIsHeld_FileNotFound_InExistingDir(t *testing.T) {
 	}
 }
 
+func TestExclusivelyHeld(t *testing.T) {
+	tests := []struct {
+		name string
+		hold func(t *testing.T, lockPath string) *indexlock.Lock
+		want bool
+	}{
+		{name: "missing file", hold: func(*testing.T, string) *indexlock.Lock { return nil }},
+		{
+			name: "free",
+			hold: func(t *testing.T, lockPath string) *indexlock.Lock {
+				mustLock(t, indexlock.TryAcquire, lockPath).Release()
+				return nil
+			},
+		},
+		{
+			name: "exclusive holder",
+			hold: func(t *testing.T, lockPath string) *indexlock.Lock {
+				return mustLock(t, indexlock.TryAcquire, lockPath)
+			},
+			want: true,
+		},
+		{
+			name: "shared holder",
+			hold: func(t *testing.T, lockPath string) *indexlock.Lock {
+				return mustLock(t, indexlock.TryAcquireShared, lockPath)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lockPath := filepath.Join(t.TempDir(), "index.db.lock")
+			lock := tt.hold(t, lockPath)
+			defer lock.Release()
+
+			held, err := indexlock.ExclusivelyHeld(lockPath)
+			if err != nil {
+				t.Fatalf("ExclusivelyHeld: %v", err)
+			}
+			if held != tt.want {
+				t.Errorf("ExclusivelyHeld = %v, want %v", held, tt.want)
+			}
+			if indexlock.IsHeld(lockPath) != tt.want {
+				t.Errorf("IsHeld disagrees with ExclusivelyHeld")
+			}
+		})
+	}
+}
+
+func TestExclusivelyHeld_DoesNotCreateFile(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "index.db.lock")
+	if _, err := indexlock.ExclusivelyHeld(lockPath); err != nil {
+		t.Fatalf("ExclusivelyHeld: %v", err)
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Error("ExclusivelyHeld must not create the lock file")
+	}
+}
+
+func mustLock(t *testing.T, acquire func(string) (*indexlock.Lock, error), lockPath string) *indexlock.Lock {
+	t.Helper()
+	lock, err := acquire(lockPath)
+	if err != nil || lock == nil {
+		t.Fatalf("acquire %s: lock=%v err=%v", lockPath, lock, err)
+	}
+	return lock
+}
+
 // TestReleaseNil verifies Release does not panic on nil.
 func TestReleaseNil(t *testing.T) {
 	var l *indexlock.Lock

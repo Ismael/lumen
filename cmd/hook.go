@@ -25,7 +25,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ory/lumen/internal/config"
-	"github.com/ory/lumen/internal/git"
 	"github.com/ory/lumen/internal/store"
 )
 
@@ -46,6 +45,7 @@ func init() {
 	rootCmd.AddCommand(hookCmd)
 	hookCmd.AddCommand(hookSessionStartCmd)
 	hookCmd.AddCommand(hookPreToolUseCmd)
+	hookCmd.AddCommand(hookEnterWorktreeCmd)
 
 	hookSessionStartCmd.Flags().StringVar(&hookSessionStartHost, "host", hookHostClaude, "Hook host output format")
 	hookSessionStartCmd.Flags().StringVar(&hookSessionStartPluginName, "plugin-name", "", "Claude Code plugin name")
@@ -148,14 +148,9 @@ func generateSessionContextInternalWithDirective(directive, cwd string, bgIndexe
 	modelName := emb.ModelName()
 	dims := cfg.ServerDims(0)
 
-	// Normalize cwd to the git repository root so the DB path matches what
-	// `lumen index` and the MCP handler use. For non-git directories, walk
-	// up to reuse an existing ancestor index.
-	if root, err := git.RepoRoot(cwd); err == nil {
-		cwd = root
-	} else if ancestor := findAncestorIndex(cwd, modelName); ancestor != "" {
-		cwd = ancestor
-	}
+	// Normalize cwd so the DB path matches what `lumen index` and the MCP
+	// handler use.
+	cwd = resolveProjectRoot(cwd, modelName)
 
 	dbPath := configuredDBPath(cfg, cwd, modelName)
 	if _, err := os.Stat(dbPath); err != nil {
