@@ -72,9 +72,10 @@ type link struct {
 }
 
 // Find groups each file's split pieces into runs, drops runs nested inside a
-// same-symbol run of the same family, compares every eligible pair outside a
-// shared run and returns the connected components of pairs whose similarity
-// is at least opts.Threshold.
+// same-symbol run of the same family and members nested inside another member
+// of their run, compares every eligible pair outside a shared run and returns
+// the connected components of pairs whose similarity is at least
+// opts.Threshold.
 func Find(chunks []store.ChunkRef, vectors map[int64][]float32, opts Options) Result {
 	rows, matrix, dims := eligibleRows(collapse(chunks, vectors), vectors, opts)
 	res := Result{Compared: len(rows)}
@@ -198,7 +199,8 @@ func covers(outer, inner *run) bool {
 }
 
 // nestedMember reports whether member m lies inside another member with a
-// vector, either strictly or with an equal span and a smaller VectorID.
+// vector: strictly, with an equal span and a smaller VectorID, or as an
+// identical copy that appears earlier in the input.
 func nestedMember(chunks []store.ChunkRef, vectors map[int64][]float32, members []int, m int) bool {
 	inner := chunks[m]
 	for _, o := range members {
@@ -209,7 +211,10 @@ func nestedMember(chunks []store.ChunkRef, vectors map[int64][]float32, members 
 		if outer.StartLine > inner.StartLine || outer.EndLine < inner.EndLine {
 			continue
 		}
-		if outer.StartLine != inner.StartLine || outer.EndLine != inner.EndLine || outer.VectorID < inner.VectorID {
+		if outer.StartLine != inner.StartLine || outer.EndLine != inner.EndLine {
+			return true
+		}
+		if outer.VectorID < inner.VectorID || (outer.VectorID == inner.VectorID && o < m) {
 			return true
 		}
 	}

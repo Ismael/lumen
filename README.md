@@ -517,6 +517,7 @@ Showing 1 of 87 clusters · 6207 chunks compared · threshold 0.93 · model text
     it can appear as several clusters.
   - A copied class can appear as a class cluster plus one cluster per copied
     method.
+  - A long decorated Python declaration may appear twice in a cluster.
   - Only functions, methods, constants, variables, interfaces and types are
     compared; documentation chunks are not.
   - Stale files are compared as they were last indexed.

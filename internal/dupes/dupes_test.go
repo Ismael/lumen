@@ -39,6 +39,7 @@ var testVectors = map[int64][]float32{
 	10: unit(1, 0, 0, 0),
 	11: unit(-1, 0, 0, 0),
 	12: unit(0, 1, 0, 0),
+	13: unit(1, 0, 0, 0),
 }
 
 func ref(path, sym, kind string, start, end int, vid int64) store.ChunkRef {
@@ -490,6 +491,88 @@ func TestFind(t *testing.T) {
 					ref("b.py", "H", "function", 1, 5, 1),
 				},
 				MaxSim: 1, MinSim: 1, Lines: 10,
+			}}},
+		},
+		{
+			name: "identical run members keep one",
+			chunks: []store.ChunkRef{
+				ref("a.py", "decorated", "function", 3, 7, 8),
+				ref("a.py", "decorated", "function", 3, 7, 8),
+				ref("b.py", "H", "function", 1, 5, 1),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 2, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.py", "decorated", "function", 3, 7, 8),
+					ref("b.py", "H", "function", 1, 5, 1),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 10,
+			}}},
+		},
+		{
+			// The splitter back-dates each later piece by 10 lines, and both copies
+			// cut at the same boundaries after the first piece.
+			name: "split decorated double emission cut at the same boundaries keeps one copy per file",
+			chunks: []store.ChunkRef{
+				ref("a.py", "decorated", "function", 9, 44, 1),
+				ref("a.py", "decorated", "function", 35, 80, 8),
+				ref("a.py", "decorated", "function", 71, 90, 9),
+				ref("a.py", "decorated", "function", 10, 44, 2),
+				ref("a.py", "decorated", "function", 35, 80, 8),
+				ref("a.py", "decorated", "function", 71, 90, 9),
+				ref("b.py", "decorated", "function", 9, 44, 1),
+				ref("b.py", "decorated", "function", 35, 80, 8),
+				ref("b.py", "decorated", "function", 71, 90, 9),
+				ref("b.py", "decorated", "function", 10, 44, 2),
+				ref("b.py", "decorated", "function", 35, 80, 8),
+				ref("b.py", "decorated", "function", 71, 90, 9),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 6, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.py", "decorated", "function", 9, 44, 1),
+					ref("a.py", "decorated", "function", 35, 80, 8),
+					ref("a.py", "decorated", "function", 71, 90, 9),
+					ref("b.py", "decorated", "function", 9, 44, 1),
+					ref("b.py", "decorated", "function", 35, 80, 8),
+					ref("b.py", "decorated", "function", 71, 90, 9),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 204,
+			}}},
+		},
+		{
+			// Accepted limitation: copies cut at different boundaries overlap without
+			// containment, so only the bare 73-90 piece (inside 71-90) is dropped.
+			name: "split decorated double emission cut at different boundaries keeps both copies",
+			chunks: []store.ChunkRef{
+				ref("a.py", "decorated", "function", 9, 44, 1),
+				ref("a.py", "decorated", "function", 45, 80, 8),
+				ref("a.py", "decorated", "function", 71, 90, 9),
+				ref("a.py", "decorated", "function", 10, 46, 2),
+				ref("a.py", "decorated", "function", 47, 82, 10),
+				ref("a.py", "decorated", "function", 73, 90, 13),
+				ref("b.py", "decorated", "function", 9, 44, 1),
+				ref("b.py", "decorated", "function", 45, 80, 8),
+				ref("b.py", "decorated", "function", 71, 90, 9),
+				ref("b.py", "decorated", "function", 10, 46, 2),
+				ref("b.py", "decorated", "function", 47, 82, 10),
+				ref("b.py", "decorated", "function", 73, 90, 13),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 10, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.py", "decorated", "function", 9, 44, 1),
+					ref("a.py", "decorated", "function", 10, 46, 2),
+					ref("a.py", "decorated", "function", 45, 80, 8),
+					ref("a.py", "decorated", "function", 47, 82, 10),
+					ref("a.py", "decorated", "function", 71, 90, 9),
+					ref("b.py", "decorated", "function", 9, 44, 1),
+					ref("b.py", "decorated", "function", 10, 46, 2),
+					ref("b.py", "decorated", "function", 45, 80, 8),
+					ref("b.py", "decorated", "function", 47, 82, 10),
+					ref("b.py", "decorated", "function", 71, 90, 9),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 330,
 			}}},
 		},
 		{
