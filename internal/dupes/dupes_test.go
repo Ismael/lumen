@@ -346,6 +346,64 @@ func TestFind(t *testing.T) {
 			}}},
 		},
 		{
+			name: "constructor inside its class of the same symbol is not collapsed",
+			chunks: []store.ChunkRef{
+				ref("A.java", "Foo", "type", 3, 16, 1),
+				ref("A.java", "Foo", "function", 6, 11, 2),
+				ref("B.java", "Foo", "type", 3, 16, 8),
+				ref("B.java", "Foo", "function", 6, 11, 9),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 4, Clusters: []Cluster{
+				{
+					Chunks: []store.ChunkRef{
+						ref("A.java", "Foo", "type", 3, 16, 1),
+						ref("B.java", "Foo", "type", 3, 16, 8),
+					},
+					MaxSim: 1, MinSim: 1, Lines: 28,
+				},
+				{
+					Chunks: []store.ChunkRef{
+						ref("A.java", "Foo", "function", 6, 11, 2),
+						ref("B.java", "Foo", "function", 6, 11, 9),
+					},
+					MaxSim: 1, MinSim: 1, Lines: 12,
+				},
+			}},
+		},
+		{
+			name: "container without a vector does not collapse the chunk inside it",
+			chunks: []store.ChunkRef{
+				ref("a.ts", "X", "const", 306, 359, 999),
+				ref("a.ts", "X", "function", 308, 359, 1),
+				ref("b.ts", "X", "function", 308, 359, 2),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 2, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.ts", "X", "function", 308, 359, 1),
+					ref("b.ts", "X", "function", 308, 359, 2),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 104,
+			}}},
+		},
+		{
+			name: "doc-kind container does not collapse a code chunk",
+			chunks: []store.ChunkRef{
+				ref("a.md", "X", "section", 1, 50, 8),
+				ref("a.md", "X", "function", 10, 20, 1),
+				ref("b.go", "Y", "function", 1, 11, 2),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 2, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.md", "X", "function", 10, 20, 1),
+					ref("b.go", "Y", "function", 1, 11, 2),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 22,
+			}}},
+		},
+		{
 			name: "Include rejects paths",
 			chunks: []store.ChunkRef{
 				ref("a.go", "A", "function", 1, 10, 1),
@@ -372,6 +430,28 @@ func TestFind(t *testing.T) {
 				t.Errorf("Find() =\n%+v\nwant\n%+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFind_SharedVectorIDLinksAtThresholdOne(t *testing.T) {
+	// Normalised as store does: float32 norm, then divide. Its self-dot
+	// rounds to just below 1.
+	x := float32(1) / float32(math.Sqrt(2))
+	vec := []float32{x, x}
+	if dot(vec, vec) >= 1 {
+		t.Fatalf("fixture self-dot = %v; want < 1", dot(vec, vec))
+	}
+	chunks := []store.ChunkRef{
+		ref("a.go", "F", "function", 1, 10, 1),
+		ref("a.go", "G", "function", 20, 29, 1),
+	}
+	want := Result{Compared: 2, Clusters: []Cluster{{
+		Chunks: chunks,
+		MaxSim: 1, MinSim: 1, Lines: 20,
+	}}}
+	got := Find(chunks, map[int64][]float32{1: vec}, Options{Threshold: 1, MinLines: 1})
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Find() =\n%+v\nwant\n%+v", got, want)
 	}
 }
 

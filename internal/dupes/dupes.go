@@ -75,7 +75,7 @@ type link struct {
 // dot product and returns the connected components of pairs whose similarity
 // is at least opts.Threshold.
 func Find(chunks []store.ChunkRef, vectors map[int64][]float32, opts Options) Result {
-	rows, matrix, dims := eligibleRows(collapse(chunks), vectors, opts)
+	rows, matrix, dims := eligibleRows(collapse(chunks, vectors), vectors, opts)
 	res := Result{Compared: len(rows)}
 	if len(rows) < 2 {
 		return res
@@ -86,19 +86,26 @@ func Find(chunks []store.ChunkRef, vectors map[int64][]float32, opts Options) Re
 }
 
 // collapse drops every chunk made redundant by another chunk of the same
-// file and symbol. Input order is preserved.
-func collapse(chunks []store.ChunkRef) []store.ChunkRef {
-	type key struct{ path, symbol string }
+// file, symbol and family that has a vector. Input order is preserved.
+func collapse(chunks []store.ChunkRef, vectors map[int64][]float32) []store.ChunkRef {
+	type key struct {
+		path, symbol string
+		fam          family
+	}
 	groups := make(map[key][]int)
 	for i, c := range chunks {
-		k := key{c.RelativePath, c.Symbol}
+		fam := kindFamily(c.Kind)
+		if fam == familyNone {
+			continue
+		}
+		k := key{c.RelativePath, c.Symbol, fam}
 		groups[k] = append(groups[k], i)
 	}
 	drop := make([]bool, len(chunks))
 	for _, idx := range groups {
 		for _, i := range idx {
 			for _, j := range idx {
-				if i != j && covers(chunks[j], chunks[i]) {
+				if i != j && len(vectors[chunks[j].VectorID]) > 0 && covers(chunks[j], chunks[i]) {
 					drop[i] = true
 					break
 				}
@@ -254,7 +261,12 @@ func findLinks(rows []row, matrix []float32, dims int, threshold float32, worker
 						if skipPair(&rows[i], &rows[j]) {
 							continue
 						}
-						if sim := dot(vi, matrix[j*dims:(j+1)*dims]); sim >= threshold {
+						// A normalised vector's self-dot can round to just below 1.
+						sim := float32(1)
+						if rows[i].ref.VectorID != rows[j].ref.VectorID {
+							sim = dot(vi, matrix[j*dims:(j+1)*dims])
+						}
+						if sim >= threshold {
 							local = append(local, link{i: i, j: j, sim: sim})
 						}
 					}
