@@ -100,7 +100,6 @@ type run struct {
 	path, symbol, kind string
 	fam                family
 	start, end         int
-	minVectorID        int64
 	hasVector          bool
 	members            []int
 }
@@ -130,21 +129,19 @@ func buildRuns(chunks []store.ChunkRef, vectors map[int64][]float32) []run {
 			if cur >= 0 && c.StartLine <= runs[cur].end+1 {
 				r := &runs[cur]
 				r.end = max(r.end, c.EndLine)
-				r.minVectorID = min(r.minVectorID, c.VectorID)
 				r.hasVector = r.hasVector || hasVector
 				r.members = append(r.members, i)
 				continue
 			}
 			runs = append(runs, run{
-				path:        c.RelativePath,
-				symbol:      c.Symbol,
-				kind:        c.Kind,
-				fam:         kindFamily(c.Kind),
-				start:       c.StartLine,
-				end:         c.EndLine,
-				minVectorID: c.VectorID,
-				hasVector:   hasVector,
-				members:     []int{i},
+				path:      c.RelativePath,
+				symbol:    c.Symbol,
+				kind:      c.Kind,
+				fam:       kindFamily(c.Kind),
+				start:     c.StartLine,
+				end:       c.EndLine,
+				hasVector: hasVector,
+				members:   []int{i},
 			})
 			cur = len(runs) - 1
 		}
@@ -153,8 +150,9 @@ func buildRuns(chunks []store.ChunkRef, vectors map[int64][]float32) []run {
 }
 
 // collapse drops every run whose span lies inside the span of another run
-// with the same file, symbol and family that has a member with a vector.
-// The surviving chunks come back in no particular order.
+// with the same file, symbol and family that has a member with a vector, and
+// within each surviving run every member nested inside another member with a
+// vector. The surviving chunks come back in no particular order.
 func collapse(chunks []store.ChunkRef, vectors map[int64][]float32) []candidate {
 	runs := buildRuns(chunks, vectors)
 	type key struct {
@@ -177,7 +175,9 @@ func collapse(chunks []store.ChunkRef, vectors map[int64][]float32) []candidate 
 				}
 			}
 			for _, m := range runs[r].members {
-				out = append(out, candidate{ref: chunks[m], run: r})
+				if !nestedMember(chunks, vectors, runs[r].members, m) {
+					out = append(out, candidate{ref: chunks[m], run: r})
+				}
 			}
 		}
 	}
@@ -185,8 +185,8 @@ func collapse(chunks []store.ChunkRef, vectors map[int64][]float32) []candidate 
 }
 
 // covers reports whether outer's span contains inner's and outer wins: it is
-// larger, or the spans are equal and outer sorts first by
-// (Kind, smallest member VectorID).
+// larger, or the spans are equal and outer's Kind sorts first. Runs of one
+// kind never share a span, so Kind always breaks the tie.
 func covers(outer, inner *run) bool {
 	if outer.start > inner.start || outer.end < inner.end {
 		return false
@@ -194,10 +194,26 @@ func covers(outer, inner *run) bool {
 	if outer.start != inner.start || outer.end != inner.end {
 		return true
 	}
-	return cmp.Or(
-		cmp.Compare(outer.kind, inner.kind),
-		cmp.Compare(outer.minVectorID, inner.minVectorID),
-	) < 0
+	return outer.kind < inner.kind
+}
+
+// nestedMember reports whether member m lies inside another member with a
+// vector, either strictly or with an equal span and a smaller VectorID.
+func nestedMember(chunks []store.ChunkRef, vectors map[int64][]float32, members []int, m int) bool {
+	inner := chunks[m]
+	for _, o := range members {
+		outer := chunks[o]
+		if o == m || len(vectors[outer.VectorID]) == 0 {
+			continue
+		}
+		if outer.StartLine > inner.StartLine || outer.EndLine < inner.EndLine {
+			continue
+		}
+		if outer.StartLine != inner.StartLine || outer.EndLine != inner.EndLine || outer.VectorID < inner.VectorID {
+			return true
+		}
+	}
+	return false
 }
 
 func compareRefs(a, b store.ChunkRef) int {

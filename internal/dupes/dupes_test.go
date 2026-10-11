@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -448,6 +449,109 @@ func TestFind(t *testing.T) {
 			}}},
 		},
 		{
+			name: "same-kind copy nested in a run member collapses",
+			chunks: []store.ChunkRef{
+				ref("a.py", "decorated", "function", 3, 7, 1),
+				ref("a.py", "decorated", "function", 4, 7, 2),
+				ref("a.py", "Thing", "type", 9, 12, 4),
+				ref("a.py", "Thing", "type", 10, 12, 12),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 2},
+		},
+		{
+			name: "same-kind double emission across files gives one cluster of outer chunks",
+			chunks: []store.ChunkRef{
+				ref("a.py", "decorated", "function", 4, 7, 2),
+				ref("a.py", "decorated", "function", 3, 7, 1),
+				ref("b.py", "decorated", "function", 3, 7, 8),
+				ref("b.py", "decorated", "function", 4, 7, 9),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 2, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.py", "decorated", "function", 3, 7, 1),
+					ref("b.py", "decorated", "function", 3, 7, 8),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 10,
+			}}},
+		},
+		{
+			name: "equal-span run members keep the smaller vector id",
+			chunks: []store.ChunkRef{
+				ref("a.py", "decorated", "function", 3, 7, 9),
+				ref("a.py", "decorated", "function", 3, 7, 8),
+				ref("b.py", "H", "function", 1, 5, 1),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 2, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.py", "decorated", "function", 3, 7, 8),
+					ref("b.py", "H", "function", 1, 5, 1),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 10,
+			}}},
+		},
+		{
+			name: "split pieces of a run are all kept",
+			chunks: []store.ChunkRef{
+				ref("a.go", "F", "function", 11, 20, 2),
+				ref("a.go", "F", "function", 1, 10, 1),
+				ref("b.go", "F", "function", 1, 10, 8),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 3, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.go", "F", "function", 1, 10, 1),
+					ref("a.go", "F", "function", 11, 20, 2),
+					ref("b.go", "F", "function", 1, 10, 8),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 30,
+			}}},
+		},
+		{
+			name: "vectorless run member does not drop the member nested in it",
+			chunks: []store.ChunkRef{
+				ref("a.py", "decorated", "function", 3, 7, 999),
+				ref("a.py", "decorated", "function", 4, 7, 1),
+				ref("b.py", "G", "function", 1, 4, 2),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 2, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.py", "decorated", "function", 4, 7, 1),
+					ref("b.py", "G", "function", 1, 4, 2),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 8,
+			}}},
+		},
+		{
+			name: "ineligible middle piece still joins its neighbours into one run",
+			chunks: []store.ChunkRef{
+				ref("a.go", "F", "function", 1, 10, 1),
+				ref("a.go", "F", "function", 11, 12, 2),
+				ref("a.go", "F", "function", 13, 22, 8),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 5},
+			want: Result{Compared: 2},
+		},
+		{
+			name: "vectorless equal-span run first by kind does not drop the other run",
+			chunks: []store.ChunkRef{
+				ref("a.ts", "X", "const", 1, 10, 999),
+				ref("a.ts", "X", "function", 1, 10, 1),
+				ref("b.ts", "Y", "function", 1, 10, 2),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 2, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.ts", "X", "function", 1, 10, 1),
+					ref("b.ts", "Y", "function", 1, 10, 2),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 20,
+			}}},
+		},
+		{
 			name: "Include rejects paths",
 			chunks: []store.ChunkRef{
 				ref("a.go", "A", "function", 1, 10, 1),
@@ -474,6 +578,23 @@ func TestFind(t *testing.T) {
 				t.Errorf("Find() =\n%+v\nwant\n%+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFind_DoesNotModifyInput(t *testing.T) {
+	chunks := []store.ChunkRef{
+		ref("b.ts", "X", "function", 363, 422, 1),
+		ref("a.ts", "X", "function", 413, 439, 9),
+		ref("a.ts", "X", "const", 407, 439, 2),
+		ref("a.ts", "X", "function", 363, 422, 8),
+		ref("a.ts", "X", "const", 361, 416, 1),
+		ref("a.py", "decorated", "function", 4, 7, 2),
+		ref("a.py", "decorated", "function", 3, 7, 1),
+	}
+	before := slices.Clone(chunks)
+	_ = Find(chunks, testVectors, Options{Threshold: 0.5, MinLines: 1})
+	if !reflect.DeepEqual(chunks, before) {
+		t.Errorf("Find modified its input:\n%+v\nwant\n%+v", chunks, before)
 	}
 }
 
