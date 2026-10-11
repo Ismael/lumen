@@ -8,15 +8,14 @@ package index
 import (
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 
 	"github.com/ory/lumen/internal/merkle"
+	"github.com/ory/lumen/internal/sqlitevec"
 	"github.com/ory/lumen/internal/store"
 )
 
@@ -49,7 +48,7 @@ func (idx *Indexer) PrepareLegacyMigration(projectDir, legacyPath string) error 
 			_ = rows.Close()
 			return err
 		}
-		vector, ok := decodeFloat32Vector(blob, idx.emb.Dimensions())
+		vector, ok := sqlitevec.DeserializeFloat32(blob, idx.emb.Dimensions())
 		if ok {
 			legacyByChunk[id] = vector
 		}
@@ -97,18 +96,6 @@ func (idx *Indexer) PrepareLegacyMigration(projectDir, legacyPath string) error 
 	idx.legacyVectors = recovered
 	idx.legacySource = legacyPath
 	return nil
-}
-
-func decodeFloat32Vector(blob []byte, dimensions int) ([]float32, bool) {
-	if len(blob) != dimensions*4 {
-		return nil, false
-	}
-	vector := make([]float32, dimensions)
-	for i := range vector {
-		bits := binary.LittleEndian.Uint32(blob[i*4 : i*4+4])
-		vector[i] = math.Float32frombits(bits)
-	}
-	return vector, true
 }
 
 func (idx *Indexer) finishLegacyMigration(tree *merkle.Tree) {

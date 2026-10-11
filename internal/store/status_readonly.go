@@ -63,27 +63,38 @@ type ProjectSummary struct {
 	LastIndexedAt  string
 }
 
+// openReadOnly opens an existing database without creating it or writing to
+// it; a missing file yields an error wrapping os.ErrNotExist.
+func openReadOnly(dbPath string) (*sql.DB, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("stat %s: %w", dbPath, err)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(dbPath), RawQuery: "mode=ro"}).String()
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", dbPath, err)
+	}
+	db.SetMaxOpenConns(1)
+	for _, pragma := range []string{"PRAGMA query_only=ON", "PRAGMA busy_timeout=5000"} {
+		if _, err := db.Exec(pragma); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("exec %q: %w", pragma, err)
+		}
+	}
+	return db, nil
+}
+
 // ReadCollectionSnapshot reads dbPath without creating it, running schema
 // setup, registering projectPath, or stamping access times. A missing file
 // yields an error wrapping os.ErrNotExist; a file holding neither the shared
 // nor the legacy schema yields an error.
 func ReadCollectionSnapshot(dbPath, projectPath string) (CollectionSnapshot, error) {
 	var snap CollectionSnapshot
-	if _, err := os.Stat(dbPath); err != nil {
-		return snap, fmt.Errorf("stat %s: %w", dbPath, err)
-	}
-	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(dbPath), RawQuery: "mode=ro"}).String()
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := openReadOnly(dbPath)
 	if err != nil {
-		return snap, fmt.Errorf("open %s: %w", dbPath, err)
+		return snap, err
 	}
 	defer func() { _ = db.Close() }()
-	db.SetMaxOpenConns(1)
-	for _, pragma := range []string{"PRAGMA query_only=ON", "PRAGMA busy_timeout=5000"} {
-		if _, err := db.Exec(pragma); err != nil {
-			return snap, fmt.Errorf("exec %q: %w", pragma, err)
-		}
-	}
 
 	shared, err := checkTableExists(db, "collection_meta")
 	if err != nil {
