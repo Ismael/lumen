@@ -482,6 +482,47 @@ Collection: ~/.local/share/lumen/<profile-hash>/index.db (shared by 2 worktrees)
   index state, and 1 otherwise. `--model` and `--backend` select the server the
   same way they do for `lumen index`.
 
+**`lumen dupes [dir]`** reports clusters of likely-duplicated code using the
+embeddings already stored in the index. `dir` defaults to the current directory
+and resolves to the same index as `lumen search`; a subdirectory limits the
+comparison to chunks under it. The command is read-only: it never reindexes,
+never asks the embedding server for embeddings and never modifies the index, so
+run `lumen index` first. Example:
+
+```text
+#1  2 chunks · 90 lines · similarity 0.96
+  src/services/mediaService.ts:417-470   disconnectMediaFromClip (method)
+  src/services/uploadService.ts:70-105   disconnectMediaFromClip (method)
+
+Showing 1 of 87 clusters · 6207 chunks compared · threshold 0.93 · model text-embedding-qwen3-embedding-0.6b
+```
+
+- Flags: `--threshold` (default `0.93`, allowed `0.80`–`1.0`), `--min-lines`
+  (default `5`), `--limit` (clusters shown, default `20`, `0` shows all),
+  `--no-tests` (skip test files), plus `--model` and `--backend` as for
+  `lumen status`.
+- Clusters are ordered by total lines, then similarity. A cluster shows its
+  strongest similarity, or a `min–max` range when its links differ. The footer
+  adds the directory scope and, if any, the number of files that were
+  mid-index and skipped.
+- The default threshold was calibrated on `qwen3-embedding-0.6b`: pairs at 0.95
+  and above were almost all real copy-paste, 0.93–0.95 mostly real, and below
+  about 0.88 mostly merely related code. Other models may need a different
+  `--threshold`.
+- Limitations:
+  - Clustering is single-linkage, so at lower thresholds related but different
+    code can chain into one cluster. The similarity range describes the links,
+    not every pair of members.
+  - A function longer than the chunk limit is split into pieces, so a copy of
+    it can appear as several clusters.
+  - A copied class can appear as a class cluster plus one cluster per copied
+    method.
+  - Only functions, methods, constants, variables, interfaces and types are
+    compared; documentation chunks are not.
+  - Stale files are compared as they were last indexed.
+  - Outside a git repository, running from a subdirectory finds the ancestor
+    index only for the default int8/512 profile.
+
 ### Claude Code hooks
 
 `hooks/hooks.json` registers two hooks:
