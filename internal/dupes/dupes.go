@@ -23,7 +23,7 @@ type Options struct {
 
 // Cluster is a connected group of chunks whose links all meet the threshold.
 type Cluster struct {
-	Chunks []store.ChunkRef // sorted (RelativePath, StartLine, EndLine, Kind, Symbol)
+	Chunks []store.ChunkRef // sorted (RelativePath, StartLine, EndLine, Kind, Symbol, VectorID)
 	MaxSim float32
 	MinSim float32
 	Lines  int // sum of member line counts
@@ -31,7 +31,7 @@ type Cluster struct {
 
 // Result holds the clusters found and the number of chunks compared.
 type Result struct {
-	Clusters []Cluster // ordered: Lines desc, MaxSim desc, first chunk's sort key
+	Clusters []Cluster // ordered: Lines desc, MaxSim desc, then the first chunk's sort key
 	Compared int       // eligible chunk count
 }
 
@@ -57,13 +57,13 @@ func kindFamily(kind string) family {
 // rowBlock is the number of matrix rows a worker claims at a time.
 const rowBlock = 32
 
-// row is an eligible chunk with its path and symbol interned so the pair
-// loop compares integers.
+// row is an eligible chunk with its path interned so the pair loop compares
+// integers.
 type row struct {
-	ref    store.ChunkRef
-	fam    family
-	file   int
-	symbol int
+	ref  store.ChunkRef
+	fam  family
+	file int
+	run  int
 }
 
 type link struct {
@@ -71,8 +71,9 @@ type link struct {
 	sim  float32
 }
 
-// Find collapses nested same-symbol chunks, compares every eligible pair by
-// dot product and returns the connected components of pairs whose similarity
+// Find groups each file's split pieces into runs, drops runs nested inside a
+// same-symbol run of the same family, compares every eligible pair outside a
+// shared run and returns the connected components of pairs whose similarity
 // is at least opts.Threshold.
 func Find(chunks []store.ChunkRef, vectors map[int64][]float32, opts Options) Result {
 	rows, matrix, dims := eligibleRows(collapse(chunks, vectors), vectors, opts)
@@ -85,56 +86,118 @@ func Find(chunks []store.ChunkRef, vectors map[int64][]float32, opts Options) Re
 	return res
 }
 
-// collapse drops every chunk made redundant by another chunk of the same
-// file, symbol and family that has a vector. Input order is preserved.
-func collapse(chunks []store.ChunkRef, vectors map[int64][]float32) []store.ChunkRef {
+// candidate is a chunk that survived collapse, tagged with the index of its
+// run.
+type candidate struct {
+	ref store.ChunkRef
+	run int
+}
+
+// run is a sequence of chunks in one file with the same (Symbol, Kind), each
+// touching or overlapping the ones before it: the pieces of one split
+// declaration, or a single unsplit chunk.
+type run struct {
+	path, symbol, kind string
+	fam                family
+	start, end         int
+	minVectorID        int64
+	hasVector          bool
+	members            []int
+}
+
+// buildRuns groups every code and decl chunk into runs. Other kinds belong to
+// no run.
+func buildRuns(chunks []store.ChunkRef, vectors map[int64][]float32) []run {
+	type key struct{ path, symbol, kind string }
+	groups := make(map[key][]int)
+	for i, c := range chunks {
+		if kindFamily(c.Kind) == familyNone {
+			continue
+		}
+		k := key{c.RelativePath, c.Symbol, c.Kind}
+		groups[k] = append(groups[k], i)
+	}
+
+	var runs []run
+	for _, idx := range groups {
+		slices.SortFunc(idx, func(a, b int) int {
+			return cmp.Compare(chunks[a].StartLine, chunks[b].StartLine)
+		})
+		cur := -1
+		for _, i := range idx {
+			c := chunks[i]
+			hasVector := len(vectors[c.VectorID]) > 0
+			if cur >= 0 && c.StartLine <= runs[cur].end+1 {
+				r := &runs[cur]
+				r.end = max(r.end, c.EndLine)
+				r.minVectorID = min(r.minVectorID, c.VectorID)
+				r.hasVector = r.hasVector || hasVector
+				r.members = append(r.members, i)
+				continue
+			}
+			runs = append(runs, run{
+				path:        c.RelativePath,
+				symbol:      c.Symbol,
+				kind:        c.Kind,
+				fam:         kindFamily(c.Kind),
+				start:       c.StartLine,
+				end:         c.EndLine,
+				minVectorID: c.VectorID,
+				hasVector:   hasVector,
+				members:     []int{i},
+			})
+			cur = len(runs) - 1
+		}
+	}
+	return runs
+}
+
+// collapse drops every run whose span lies inside the span of another run
+// with the same file, symbol and family that has a member with a vector.
+// The surviving chunks come back in no particular order.
+func collapse(chunks []store.ChunkRef, vectors map[int64][]float32) []candidate {
+	runs := buildRuns(chunks, vectors)
 	type key struct {
 		path, symbol string
 		fam          family
 	}
 	groups := make(map[key][]int)
-	for i, c := range chunks {
-		fam := kindFamily(c.Kind)
-		if fam == familyNone {
-			continue
-		}
-		k := key{c.RelativePath, c.Symbol, fam}
-		groups[k] = append(groups[k], i)
+	for r, ru := range runs {
+		k := key{ru.path, ru.symbol, ru.fam}
+		groups[k] = append(groups[k], r)
 	}
-	drop := make([]bool, len(chunks))
+
+	out := make([]candidate, 0, len(chunks))
 	for _, idx := range groups {
-		for _, i := range idx {
-			for _, j := range idx {
-				if i != j && len(vectors[chunks[j].VectorID]) > 0 && covers(chunks[j], chunks[i]) {
-					drop[i] = true
-					break
+	nextRun:
+		for _, r := range idx {
+			for _, o := range idx {
+				if o != r && runs[o].hasVector && covers(&runs[o], &runs[r]) {
+					continue nextRun
 				}
 			}
-		}
-	}
-	out := make([]store.ChunkRef, 0, len(chunks))
-	for i, c := range chunks {
-		if !drop[i] {
-			out = append(out, c)
+			for _, m := range runs[r].members {
+				out = append(out, candidate{ref: chunks[m], run: r})
+			}
 		}
 	}
 	return out
 }
 
-// covers reports whether outer's range contains inner's and outer wins:
-// it is larger, or the ranges are equal and outer sorts first by
-// (Kind, VectorID).
-func covers(outer, inner store.ChunkRef) bool {
-	if outer.StartLine > inner.StartLine || outer.EndLine < inner.EndLine {
+// covers reports whether outer's span contains inner's and outer wins: it is
+// larger, or the spans are equal and outer sorts first by
+// (Kind, smallest member VectorID).
+func covers(outer, inner *run) bool {
+	if outer.start > inner.start || outer.end < inner.end {
 		return false
 	}
-	if outer.StartLine != inner.StartLine || outer.EndLine != inner.EndLine {
+	if outer.start != inner.start || outer.end != inner.end {
 		return true
 	}
-	if c := cmp.Compare(outer.Kind, inner.Kind); c != 0 {
-		return c < 0
-	}
-	return outer.VectorID < inner.VectorID
+	return cmp.Or(
+		cmp.Compare(outer.kind, inner.kind),
+		cmp.Compare(outer.minVectorID, inner.minVectorID),
+	) < 0
 }
 
 func compareRefs(a, b store.ChunkRef) int {
@@ -152,54 +215,45 @@ func lineCount(c store.ChunkRef) int {
 	return c.EndLine - c.StartLine + 1
 }
 
-// eligibleRows filters chunks, sorts them by their report key and copies
+// eligibleRows filters candidates, sorts them by their report key and copies
 // their vectors into one row-major matrix. Row order is the sort order, so
 // cluster members collected by ascending row are already sorted.
-func eligibleRows(chunks []store.ChunkRef, vectors map[int64][]float32, opts Options) ([]row, []float32, int) {
-	candidates := make([]store.ChunkRef, 0, len(chunks))
-	for _, c := range chunks {
-		if kindFamily(c.Kind) == familyNone || lineCount(c) < opts.MinLines {
+func eligibleRows(cands []candidate, vectors map[int64][]float32, opts Options) ([]row, []float32, int) {
+	kept := make([]candidate, 0, len(cands))
+	for _, c := range cands {
+		if kindFamily(c.ref.Kind) == familyNone || lineCount(c.ref) < opts.MinLines {
 			continue
 		}
-		if opts.Include != nil && !opts.Include(c.RelativePath) {
+		if opts.Include != nil && !opts.Include(c.ref.RelativePath) {
 			continue
 		}
-		if len(vectors[c.VectorID]) == 0 {
+		if len(vectors[c.ref.VectorID]) == 0 {
 			continue
 		}
-		candidates = append(candidates, c)
+		kept = append(kept, c)
 	}
-	slices.SortStableFunc(candidates, compareRefs)
-	if len(candidates) == 0 {
+	slices.SortStableFunc(kept, func(a, b candidate) int { return compareRefs(a.ref, b.ref) })
+	if len(kept) == 0 {
 		return nil, nil, 0
 	}
 
 	// One index has one dimension; a vector of another length cannot be
 	// compared and is treated as missing.
-	dims := len(vectors[candidates[0].VectorID])
+	dims := len(vectors[kept[0].ref.VectorID])
 	files := make(map[string]int)
-	symbols := make(map[string]int)
-	intern := func(m map[string]int, s string) int {
-		id, ok := m[s]
-		if !ok {
-			id = len(m)
-			m[s] = id
-		}
-		return id
-	}
-	rows := make([]row, 0, len(candidates))
-	matrix := make([]float32, 0, len(candidates)*dims)
-	for _, c := range candidates {
-		v := vectors[c.VectorID]
+	rows := make([]row, 0, len(kept))
+	matrix := make([]float32, 0, len(kept)*dims)
+	for _, c := range kept {
+		v := vectors[c.ref.VectorID]
 		if len(v) != dims {
 			continue
 		}
-		rows = append(rows, row{
-			ref:    c,
-			fam:    kindFamily(c.Kind),
-			file:   intern(files, c.RelativePath),
-			symbol: intern(symbols, c.Symbol),
-		})
+		file, ok := files[c.ref.RelativePath]
+		if !ok {
+			file = len(files)
+			files[c.ref.RelativePath] = file
+		}
+		rows = append(rows, row{ref: c.ref, fam: kindFamily(c.ref.Kind), file: file, run: c.run})
 		matrix = append(matrix, v...)
 	}
 	return rows, matrix, dims
@@ -217,14 +271,7 @@ func skipPair(a, b *row) bool {
 	if a.ref.StartLine <= b.ref.EndLine && b.ref.StartLine <= a.ref.EndLine {
 		return true
 	}
-	if a.symbol != b.symbol {
-		return false
-	}
-	first, second := a, b
-	if second.ref.StartLine < first.ref.StartLine {
-		first, second = second, first
-	}
-	return first.ref.EndLine+1 >= second.ref.StartLine
+	return a.run == b.run
 }
 
 func dot(a, b []float32) float32 {

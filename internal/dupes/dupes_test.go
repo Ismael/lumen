@@ -157,13 +157,33 @@ func TestFind(t *testing.T) {
 			want: Result{Compared: 2},
 		},
 		{
-			name: "adjacent pieces of one symbol are not linked",
+			name: "pieces of one run never link to each other",
 			chunks: []store.ChunkRef{
+				ref("a.go", "F", "function", 21, 30, 8),
 				ref("a.go", "F", "function", 11, 20, 2),
 				ref("a.go", "F", "function", 1, 10, 1),
 			},
 			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 3},
+		},
+		{
+			name: "same-file pair sharing a vector id is skipped when overlapping",
+			chunks: []store.ChunkRef{
+				ref("a.go", "F", "function", 1, 10, 1),
+				ref("a.go", "G", "function", 5, 15, 1),
+			},
+			opts: Options{Threshold: 1, MinLines: 1},
 			want: Result{Compared: 2},
+		},
+		{
+			name: "same-file pair sharing a vector id is skipped within one run",
+			chunks: []store.ChunkRef{
+				ref("a.go", "F", "function", 1, 10, 1),
+				ref("a.go", "F", "function", 21, 30, 1),
+				ref("a.go", "F", "function", 11, 20, 2),
+			},
+			opts: Options{Threshold: 1, MinLines: 1},
+			want: Result{Compared: 3},
 		},
 		{
 			name: "same symbol separated by other lines is linked",
@@ -214,20 +234,44 @@ func TestFind(t *testing.T) {
 			}}},
 		},
 		{
-			name: "equal ranges keep the chunk first by kind then vector id",
+			name: "equal spans keep the run first by kind",
 			chunks: []store.ChunkRef{
 				ref("a.ts", "X", "function", 1, 10, 9),
-				ref("a.ts", "X", "const", 1, 10, 10),
-				ref("a.ts", "X", "const", 1, 10, 8),
+				ref("a.ts", "X", "const", 5, 10, 8),
+				ref("a.ts", "X", "const", 1, 6, 10),
 				ref("b.ts", "Y", "function", 1, 10, 1),
 			},
 			opts: Options{Threshold: 0.9, MinLines: 1},
-			want: Result{Compared: 2, Clusters: []Cluster{{
+			want: Result{Compared: 3, Clusters: []Cluster{{
 				Chunks: []store.ChunkRef{
-					ref("a.ts", "X", "const", 1, 10, 8),
+					ref("a.ts", "X", "const", 1, 6, 10),
+					ref("a.ts", "X", "const", 5, 10, 8),
 					ref("b.ts", "Y", "function", 1, 10, 1),
 				},
-				MaxSim: 1, MinSim: 1, Lines: 20,
+				MaxSim: 1, MinSim: 1, Lines: 22,
+			}}},
+		},
+		{
+			name: "split double emission collapses to the const run",
+			chunks: []store.ChunkRef{
+				ref("a.ts", "X", "const", 361, 416, 1),
+				ref("a.ts", "X", "const", 407, 439, 2),
+				ref("a.ts", "X", "function", 363, 422, 8),
+				ref("a.ts", "X", "function", 413, 439, 9),
+				ref("b.ts", "X", "function", 413, 439, 10),
+				ref("b.ts", "X", "function", 363, 422, 1),
+				ref("b.ts", "X", "const", 407, 439, 2),
+				ref("b.ts", "X", "const", 361, 416, 8),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 4, Clusters: []Cluster{{
+				Chunks: []store.ChunkRef{
+					ref("a.ts", "X", "const", 361, 416, 1),
+					ref("a.ts", "X", "const", 407, 439, 2),
+					ref("b.ts", "X", "const", 361, 416, 8),
+					ref("b.ts", "X", "const", 407, 439, 2),
+				},
+				MaxSim: 1, MinSim: 1, Lines: 56 + 33 + 56 + 33,
 			}}},
 		},
 		{
@@ -498,14 +542,14 @@ func TestFind_ResultIndependentOfWorkers(t *testing.T) {
 
 	opts := Options{Threshold: 0.85, MinLines: 3}
 	var results []Result
-	for _, w := range []int{1, 2, 7} {
+	for _, w := range []int{1, 2, 7, 0} {
 		opts.Workers = w
 		results = append(results, Find(chunks, vectors, opts))
 	}
 	if len(results[0].Clusters) < 5 {
 		t.Fatalf("fixture produced %d clusters; want enough to exercise merging", len(results[0].Clusters))
 	}
-	for i, w := range []int{2, 7} {
+	for i, w := range []int{2, 7, 0} {
 		if !reflect.DeepEqual(results[0], results[i+1]) {
 			t.Errorf("Workers=%d result differs from Workers=1", w)
 		}
