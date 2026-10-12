@@ -488,7 +488,7 @@ embeddings already stored in the index. `dir` defaults to the current directory
 and resolves to the same index as `lumen search`; a subdirectory limits the
 comparison to chunks under it. The command is read-only: it never reindexes,
 never asks the embedding server for embeddings and never modifies the index, so
-run `lumen index` first. Example, abbreviated to its first cluster:
+run `lumen index` first. Example, abbreviated:
 
 ```text
 #1  2 chunks · 90 lines · similarity 0.96
@@ -504,8 +504,8 @@ Showing 20 of 87 clusters · 6207 chunks compared · threshold 0.93 · model tex
   (default `5`), `--limit` (clusters shown, default `20`, `0` shows all),
   `--no-tests` (skip test files), plus `--model` and `--backend` as for
   `lumen status`.
-- Clusters are ordered by the distinct lines they cover, then similarity. A cluster shows its
-  strongest similarity, or a `min–max` range when its links differ. The footer
+- Clusters are ordered by the distinct lines they cover, then similarity. A
+  cluster shows its strongest similarity, or a `min–max` range when its links differ. The footer
   adds the directory scope and, if any, the number of files that were
   mid-index and skipped.
 - The default threshold was calibrated on `qwen3-embedding-0.6b`: pairs at 0.95

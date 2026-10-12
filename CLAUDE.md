@@ -119,7 +119,8 @@ required) into `bin/lumen`, skipped when `bin/lumen.source-version` matches the
 checkout's version. If the build is impossible or fails, it falls through to any
 existing binary (`bin/lumen`, `bin/lumen-<os>-<arch>`) and only then downloads
 upstream's release binary, which lacks the fork's `lumen status`,
-`lumen dupes` and EnterWorktree hook. The Windows launcher never builds from source.
+`lumen dupes` and EnterWorktree hook. The Windows launcher never builds from
+source.
 `make build-local` writes no `bin/lumen.source-version` stamp, so unless one is
 left from an earlier launcher build, `scripts/run` rebuilds `bin/lumen` once on
 the first `--plugin-dir` launch.
