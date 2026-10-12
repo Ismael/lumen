@@ -23,7 +23,7 @@ import (
 
 func TestFindDonorIndex_NoSiblings(t *testing.T) {
 	dir := t.TempDir()
-	result := FindDonorIndexBase(dir, "/some/path", "model")
+	result := FindDonorIndex("/some/path", defaultProfile(dir, "model"))
 	if result != "" {
 		t.Fatalf("expected empty string, got %q", result)
 	}
@@ -59,7 +59,7 @@ func TestFindDonorIndex_WithSibling(t *testing.T) {
 	}
 
 	// From the worktree, we should find the main's index.
-	result := FindDonorIndexBase(dataDir, wt, "test-model")
+	result := FindDonorIndex(wt, defaultProfile(dataDir, "test-model"))
 	if result != donorDB {
 		t.Fatalf("expected %q, got %q", donorDB, result)
 	}
@@ -97,7 +97,7 @@ func TestFindDonorIndex_NestedWorktree(t *testing.T) {
 	}
 
 	// From the nested worktree we must find the parent repo's index, not "".
-	result := FindDonorIndexBase(dataDir, nested, "test-model")
+	result := FindDonorIndex(nested, defaultProfile(dataDir, "test-model"))
 	if result != donorDB {
 		t.Fatalf("expected nested worktree to seed from parent index %q, got %q", donorDB, result)
 	}
@@ -132,9 +132,49 @@ func TestFindDonorIndex_WrongModel(t *testing.T) {
 	}
 
 	// Looking for model-b should not find model-a's index.
-	result := FindDonorIndexBase(dataDir, wt, "model-b")
+	result := FindDonorIndex(wt, defaultProfile(dataDir, "model-b"))
 	if result != "" {
 		t.Fatalf("expected empty string for wrong model, got %q", result)
+	}
+}
+
+func TestFindDonorIndex_OtherProfile(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+
+	main := t.TempDir()
+	gitRun(t, main, "git", "init")
+	gitRun(t, main, "git", "commit", "--allow-empty", "-m", "init")
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitRun(t, main, "git", "worktree", "add", wt)
+
+	mainResolved, err := filepath.EvalSymlinks(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	int8DB := DBPathForProjectProfileBase(dataDir, mainResolved, "model", 1024, "int8", 512)
+	if err := os.MkdirAll(filepath.Dir(int8DB), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(int8DB, []byte("fake-db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	float32Profile := func(projectPath string) string {
+		return DBPathForProjectProfileBase(dataDir, projectPath, "model", 1024, "float32", 512)
+	}
+	if result := FindDonorIndex(wt, float32Profile); result != "" {
+		t.Fatalf("a float32 collection must not seed from an int8 one, got donor %q", result)
+	}
+}
+
+func defaultProfile(dataDir, model string) func(string) string {
+	return func(projectPath string) string {
+		return DBPathForProjectBase(dataDir, projectPath, model)
 	}
 }
 

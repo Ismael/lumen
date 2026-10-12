@@ -126,7 +126,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	emb.SetLogger(logger)
 	modelName := emb.ModelName()
 
-	indexRoot, projectPath, err := resolveIndexRoot(pathFlag, cwdFlag, modelName)
+	indexRoot, projectPath, err := resolveIndexRoot(pathFlag, cwdFlag, configuredDBPathFor(cfg, modelName))
 	if err != nil {
 		return fmt.Errorf("resolve paths: %w", err)
 	}

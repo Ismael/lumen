@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ory/lumen/internal/config"
 	"github.com/ory/lumen/internal/git"
 )
 
@@ -39,7 +38,7 @@ import (
 //     preferred root only when an index already exists at that location —
 //     matching the MCP guard that avoids creating a brand-new index at a large
 //     ancestor tree.
-func resolveIndexRoot(pathFlag, cwdFlag, model string) (indexRoot, searchPath string, err error) {
+func resolveIndexRoot(pathFlag, cwdFlag string, dbPathFor func(projectPath string) string) (indexRoot, searchPath string, err error) {
 	// Determine the search target path.
 	searchPath = pathFlag
 	if searchPath == "" {
@@ -65,7 +64,7 @@ func resolveIndexRoot(pathFlag, cwdFlag, model string) (indexRoot, searchPath st
 	indexRoot = searchPath
 	if root, gitErr := git.RepoRoot(searchPath); gitErr == nil {
 		indexRoot = root
-	} else if ancestor := findAncestorIndex(searchPath, model); ancestor != "" {
+	} else if ancestor := findAncestorIndex(searchPath, dbPathFor); ancestor != "" {
 		indexRoot = ancestor
 	}
 
@@ -81,7 +80,7 @@ func resolveIndexRoot(pathFlag, cwdFlag, model string) (indexRoot, searchPath st
 
 		if indexRoot == searchPath {
 			// searchPath had no git root and no ancestor — check if cwd has an index.
-			if _, statErr := os.Stat(config.DBPathForProject(absCwd, model)); statErr == nil {
+			if _, statErr := os.Stat(dbPathFor(absCwd)); statErr == nil {
 				indexRoot = absCwd
 			}
 		}

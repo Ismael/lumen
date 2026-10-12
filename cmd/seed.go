@@ -25,7 +25,7 @@ import (
 )
 
 type seedOptions struct {
-	findDonor func(string, string) string
+	findDonor func(string, func(string) string) string
 	seed      func(context.Context, string, string, string) (bool, error)
 	status    func(string)
 }
@@ -39,7 +39,7 @@ type seedOptions struct {
 // Seeding is best-effort — any failure is logged and indexing continues with a
 // from-scratch build. The returned warning is suitable for surfacing to MCP
 // clients. When dbPath already exists it is a single stat on the hot path.
-func seedFromDonorIfNew(ctx context.Context, dbPath, projectPath, model string, logger *slog.Logger, opts seedOptions) string {
+func seedFromDonorIfNew(ctx context.Context, dbPath, projectPath string, dbPathFor func(projectPath string) string, logger *slog.Logger, opts seedOptions) string {
 	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
 		// Exists already, or stat failed for some other reason — nothing to do.
 		return ""
@@ -49,7 +49,7 @@ func seedFromDonorIfNew(ctx context.Context, dbPath, projectPath, model string, 
 	if findDonor == nil {
 		findDonor = config.FindDonorIndex
 	}
-	donorPath := findDonor(projectPath, model)
+	donorPath := findDonor(projectPath, dbPathFor)
 	if donorPath == "" {
 		return ""
 	}

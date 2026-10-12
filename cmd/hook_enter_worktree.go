@@ -164,7 +164,7 @@ func resolveEnterWorktreeTarget(path string) (root, dbPath string, err error) {
 		return "", "", fmt.Errorf("load config: %w", err)
 	}
 	modelName := newEmbedder(cfg).ModelName()
-	root = resolveProjectRoot(path, modelName)
+	root = resolveProjectRoot(path, configuredDBPathFor(cfg, modelName))
 	return root, configuredDBPath(cfg, root, modelName), nil
 }
 

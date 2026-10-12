@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 )
 
 // Auto registers sqlite-vec for every SQLite connection opened afterward.
@@ -28,6 +29,19 @@ func Auto() error {
 func Cancel() {
 	// Cancellation is best-effort cleanup; registration may already be absent.
 	_ = C.sqlite3_cancel_auto_extension((*[0]byte)(C.sqlite3_vec_init))
+}
+
+// DeserializeFloat32 decodes a little-endian float32 blob of exactly dims
+// elements; ok is false on a length mismatch.
+func DeserializeFloat32(blob []byte, dims int) (vec []float32, ok bool) {
+	if len(blob) != dims*4 {
+		return nil, false
+	}
+	vec = make([]float32, dims)
+	for i := range vec {
+		vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:]))
+	}
+	return vec, true
 }
 
 // SerializeFloat32 encodes a vector as sqlite-vec's little-endian float BLOB.

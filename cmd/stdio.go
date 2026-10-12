@@ -221,7 +221,7 @@ type indexerCache struct {
 	reindexTimeout    time.Duration                                                                                                            // override for tests; 0 reads from cfg, then defaultReindexTimeout
 	embedTimeout      time.Duration                                                                                                            // override for tests; 0 means defaultEmbedTimeout
 	staleEmbedTimeout time.Duration                                                                                                            // override for tests; 0 means defaultStaleEmbedTimeout
-	findDonorFunc     func(string, string) string                                                                                              // nil uses config.FindDonorIndex
+	findDonorFunc     func(string, func(string) string) string                                                                                 // nil uses config.FindDonorIndex
 	seedFunc          func(context.Context, string, string, string) (bool, error)                                                              // nil uses index.SeedFromDonorContext
 	ensureFreshFunc   func(ctx context.Context, idx *index.Indexer, projectDir string, progress index.ProgressFunc) (bool, index.Stats, error) // nil uses idx.EnsureFresh
 	log               *slog.Logger
@@ -558,7 +558,8 @@ func (ic *indexerCache) getOrCreate(projectPath string, preferredRoot string, mo
 	if seedCtx == nil {
 		seedCtx = context.Background()
 	}
-	seedWarning := seedFromDonorIfNew(seedCtx, dbPath, effectiveRoot, modelName, ic.logger(), seedOptions{
+	dbPathFor := func(projectPath string) string { return ic.dbPath(projectPath, modelName) }
+	seedWarning := seedFromDonorIfNew(seedCtx, dbPath, effectiveRoot, dbPathFor, ic.logger(), seedOptions{
 		findDonor: ic.findDonorFunc,
 		seed:      ic.seedFunc,
 	})

@@ -48,7 +48,7 @@ func TestResolveIndexRoot(t *testing.T) {
 		}
 		runGit(t, repoDir, "init")
 
-		indexRoot, searchPath, err := resolveIndexRoot(filepath.Join(repoDir, "sub"), "", model)
+		indexRoot, searchPath, err := resolveIndexRoot(filepath.Join(repoDir, "sub"), "", defaultDBPathFor(model))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -69,7 +69,7 @@ func TestResolveIndexRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		indexRoot, searchPath, err := resolveIndexRoot(dir, "", model)
+		indexRoot, searchPath, err := resolveIndexRoot(dir, "", defaultDBPathFor(model))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -95,7 +95,7 @@ func TestResolveIndexRoot(t *testing.T) {
 		}
 		runGit(t, subDir, "init")
 
-		indexRoot, searchPath, err := resolveIndexRoot(subDir, parentDir, model)
+		indexRoot, searchPath, err := resolveIndexRoot(subDir, parentDir, defaultDBPathFor(model))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -127,7 +127,7 @@ func TestResolveIndexRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		indexRoot, searchPath, err := resolveIndexRoot(subDir, parentDir, model)
+		indexRoot, searchPath, err := resolveIndexRoot(subDir, parentDir, defaultDBPathFor(model))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -151,7 +151,7 @@ func TestResolveIndexRoot(t *testing.T) {
 		}
 		// No index at parentDir.
 
-		indexRoot, searchPath, err := resolveIndexRoot(subDir, parentDir, model)
+		indexRoot, searchPath, err := resolveIndexRoot(subDir, parentDir, defaultDBPathFor(model))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -183,7 +183,7 @@ func TestResolveIndexRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		indexRoot, searchPath, err := resolveIndexRoot(subDir, "", model)
+		indexRoot, searchPath, err := resolveIndexRoot(subDir, "", defaultDBPathFor(model))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

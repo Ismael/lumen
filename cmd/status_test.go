@@ -381,23 +381,37 @@ func TestCollectStatus_NonDefaultProfileAndStaleness(t *testing.T) {
 	if reverted.stale != "no" {
 		t.Errorf("after reverting the edit stale = %q, want no", reverted.stale)
 	}
+}
 
-	// An interrupted index leaves incomplete revisions while root_hash may
-	// already match the tree; the indexer treats that as needing a reindex.
-	s, err := store.NewCollection(dbPath, 4, cfg.VectorStorage(), project)
+func TestCollectStatus_FindsNonGitAncestorUnderConfiguredProfile(t *testing.T) {
+	statusTestEnv(t, true)
+	t.Setenv("LUMEN_VECTOR_STORAGE", "float32")
+	cfg, err := config.NewConfigService(config.DefaultConfigPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertFile("pending.go", ""); err != nil {
-		t.Fatal(err)
-	}
-	_ = s.Close()
-	incomplete, err := collectStatus(context.Background(), cfg, project)
+	ancestor, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if incomplete.stale != "yes" {
-		t.Errorf("with incomplete revisions stale = %q, want yes", incomplete.stale)
+	sub := filepath.Join(ancestor, "pkg", "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := configuredDBPath(cfg, ancestor, embedder.DefaultModel)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dbPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := collectStatus(context.Background(), cfg, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.root != ancestor {
+		t.Errorf("root = %q, want the ancestor %q indexed under the configured profile", r.root, ancestor)
 	}
 }
 

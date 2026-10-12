@@ -150,7 +150,7 @@ func generateSessionContextInternalWithDirective(directive, cwd string, bgIndexe
 
 	// Normalize cwd so the DB path matches what `lumen index` and the MCP
 	// handler use.
-	cwd = resolveProjectRoot(cwd, modelName)
+	cwd = resolveProjectRoot(cwd, configuredDBPathFor(cfg, modelName))
 
 	dbPath := configuredDBPath(cfg, cwd, modelName)
 	if _, err := os.Stat(dbPath); err != nil {

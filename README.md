@@ -100,7 +100,8 @@ Verify by starting a new Claude session and running `/lumen:doctor`.
 
 **Claude Code (fork marketplace)**
 
-This fork adds [`lumen status`](#cli-reference) and the worktree-aware
+This fork adds [`lumen status`](#cli-reference),
+[`lumen dupes`](#cli-reference) and the worktree-aware
 [Claude Code hooks](#claude-code-hooks). It installs from its own marketplace
 (`.claude-plugin/marketplace.json`):
 
@@ -481,6 +482,54 @@ Collection: ~/.local/share/lumen/<profile-hash>/index.db (shared by 2 worktrees)
 - Exit code is 0 when at least one embedding server is usable, whatever the
   index state, and 1 otherwise. `--model` and `--backend` select the server the
   same way they do for `lumen index`.
+
+**`lumen dupes [dir]`** reports clusters of likely-duplicated code using the
+embeddings already stored in the index. `dir` defaults to the current directory
+and resolves to the same index as `lumen search`; a subdirectory limits the
+comparison to chunks under it. The command is read-only: it never reindexes,
+never asks the embedding server for embeddings and never modifies the index, so
+run `lumen index` first. Example, abbreviated:
+
+```text
+#1  2 chunks · 90 lines · similarity 0.96
+  src/services/mediaService.ts:417-470   disconnectMediaFromClip (method)
+  src/services/uploadService.ts:70-105   disconnectMediaFromClip (method)
+
+#2  ...
+
+Showing 20 of 87 clusters · 6207 chunks compared · threshold 0.93 · model text-embedding-qwen3-embedding-0.6b
+```
+
+- Flags: `--threshold` (default `0.93`, allowed `0.80`–`1.0`), `--min-lines`
+  (default `5`), `--limit` (clusters shown, default `20`, `0` shows all),
+  `--no-tests` (skip test files), plus `--model` and `--backend` as for
+  `lumen status`.
+- Clusters are ordered by the distinct lines they cover, then similarity. A
+  cluster shows its strongest similarity, or a `min–max` range when its links differ. The footer
+  adds the directory scope and, if any, the number of files that were
+  mid-index and skipped.
+- The default threshold was calibrated on `qwen3-embedding-0.6b`: pairs at 0.95
+  and above were almost all real copy-paste, 0.93–0.95 mostly real, and below
+  about 0.88 mostly merely related code. Other models may need a different
+  `--threshold`.
+- The default was calibrated on `float32` storage; `int8`, the default storage,
+  shifts scores slightly.
+- Copies in different files score just below 1.0 because the file path is part
+  of the embedding input, so use 0.97–0.99, not 1.0, for near-exact copies.
+- Limitations:
+  - Clustering is single-linkage, so at lower thresholds related but different
+    code can chain into one cluster. The similarity range describes the links,
+    not every pair of members.
+  - A function longer than the chunk limit is split into pieces, so a copy of
+    it can appear as several clusters.
+  - A copied class can appear as a class cluster plus one cluster per copied
+    method.
+  - A long decorated Python declaration may appear twice in a cluster.
+  - Only functions, methods, constants, variables, interfaces and types are
+    compared; documentation chunks are not.
+  - Stale files are compared as they were last indexed.
+  - Outside a git repository, running from a subdirectory finds the ancestor
+    index only for the default int8/512 profile.
 
 ### Claude Code hooks
 

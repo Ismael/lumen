@@ -755,13 +755,12 @@ func (s *Store) Stats() (StoreStats, error) {
 	return stats, nil
 }
 
-// HasSentinelFiles reports whether any files have an empty hash, indicating
-// they were registered but never fully indexed (interrupted run).
-// Uses the read-only connection when available for consistency with other
-// read methods (GetMeta, Stats, Search).
+// HasSentinelFiles reports whether a legacy store has files left with an empty
+// hash by an interrupted run. Shared collections never do: memberships are
+// installed with their complete revision and root_hash is written last.
 func (s *Store) HasSentinelFiles() (bool, error) {
 	if s.shared {
-		return s.sharedHasSentinelFiles()
+		return false, nil
 	}
 	var exists bool
 	err := s.reader().QueryRow("SELECT EXISTS(SELECT 1 FROM files WHERE hash = '')").Scan(&exists)

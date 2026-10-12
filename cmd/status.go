@@ -167,7 +167,7 @@ func collectStatus(ctx context.Context, cfg *config.ConfigService, target string
 	r.servers = probeServers(ctx, cfg.Servers())
 	r.model = activeModel(r.servers)
 
-	root, _, err := resolveIndexRoot(target, "", r.model)
+	root, _, err := resolveIndexRoot(target, "", configuredDBPathFor(cfg, r.model))
 	if err != nil {
 		return r, err
 	}
@@ -206,7 +206,7 @@ func collectStatus(ctx context.Context, cfg *config.ConfigService, target string
 	r.lastIndexedAt = meta["last_indexed_at"]
 	r.lastError = meta[store.MetaLastIndexError]
 	r.indexingNow = indexingNow(r.dbPath, root)
-	r.stale = staleness(root, meta["root_hash"], snap.Project.HasIncompleteFiles)
+	r.stale = staleness(root, meta["root_hash"])
 	return r, nil
 }
 
@@ -275,8 +275,8 @@ func indexingNow(dbPath, root string) bool {
 		indexlock.IsHeld(indexlock.LockPathForDB(dbPath))
 }
 
-func staleness(root, storedRootHash string, hasIncompleteFiles bool) string {
-	if storedRootHash == "" || hasIncompleteFiles {
+func staleness(root, storedRootHash string) string {
+	if storedRootHash == "" {
 		return "yes"
 	}
 	tree, err := merkle.BuildTree(root, index.MakeSkip(root))

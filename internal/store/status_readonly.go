@@ -49,10 +49,7 @@ type ProjectSnapshot struct {
 	Path   string
 	Files  int
 	Chunks int
-	// HasIncompleteFiles marks revisions left by an interrupted index run,
-	// which the indexer reindexes even when root_hash matches.
-	HasIncompleteFiles bool
-	Meta               map[string]string
+	Meta   map[string]string
 }
 
 // ProjectSummary describes one project membership of a collection.
@@ -63,27 +60,38 @@ type ProjectSummary struct {
 	LastIndexedAt  string
 }
 
+// openReadOnly opens an existing database without creating it or writing to
+// it; a missing file yields an error wrapping os.ErrNotExist.
+func openReadOnly(dbPath string) (*sql.DB, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("stat %s: %w", dbPath, err)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(dbPath), RawQuery: "mode=ro"}).String()
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", dbPath, err)
+	}
+	db.SetMaxOpenConns(1)
+	for _, pragma := range []string{"PRAGMA query_only=ON", "PRAGMA busy_timeout=5000"} {
+		if _, err := db.Exec(pragma); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("exec %q: %w", pragma, err)
+		}
+	}
+	return db, nil
+}
+
 // ReadCollectionSnapshot reads dbPath without creating it, running schema
 // setup, registering projectPath, or stamping access times. A missing file
 // yields an error wrapping os.ErrNotExist; a file holding neither the shared
 // nor the legacy schema yields an error.
 func ReadCollectionSnapshot(dbPath, projectPath string) (CollectionSnapshot, error) {
 	var snap CollectionSnapshot
-	if _, err := os.Stat(dbPath); err != nil {
-		return snap, fmt.Errorf("stat %s: %w", dbPath, err)
-	}
-	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(dbPath), RawQuery: "mode=ro"}).String()
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := openReadOnly(dbPath)
 	if err != nil {
-		return snap, fmt.Errorf("open %s: %w", dbPath, err)
+		return snap, err
 	}
 	defer func() { _ = db.Close() }()
-	db.SetMaxOpenConns(1)
-	for _, pragma := range []string{"PRAGMA query_only=ON", "PRAGMA busy_timeout=5000"} {
-		if _, err := db.Exec(pragma); err != nil {
-			return snap, fmt.Errorf("exec %q: %w", pragma, err)
-		}
-	}
 
 	shared, err := checkTableExists(db, "collection_meta")
 	if err != nil {
@@ -194,9 +202,6 @@ func readProjectSnapshot(tx *sql.Tx, projectPath string) (*ProjectSnapshot, erro
 		(SELECT count(*) FROM chunk_defs cd JOIN project_files pf ON pf.file_revision_id = cd.file_revision_id WHERE pf.project_id = ?)`,
 		id, id).Scan(&p.Files, &p.Chunks); err != nil {
 		return nil, fmt.Errorf("project counts: %w", err)
-	}
-	if p.HasIncompleteFiles, err = projectHasSentinelFiles(tx, id); err != nil {
-		return nil, fmt.Errorf("check incomplete files: %w", err)
 	}
 	rows, err := tx.Query(`SELECT key, value FROM project_meta WHERE project_id = ?`, id)
 	if err != nil {

@@ -888,20 +888,6 @@ func (s *Store) CollectionStats() (CollectionStats, error) {
 	return stats, nil
 }
 
-func (s *Store) sharedHasSentinelFiles() (bool, error) {
-	return projectHasSentinelFiles(s.reader(), s.projectID)
-}
-
-func projectHasSentinelFiles(q interface {
-	QueryRow(query string, args ...any) *sql.Row
-}, projectID int64) (bool, error) {
-	var exists bool
-	err := q.QueryRow(`SELECT EXISTS(
-		SELECT 1 FROM project_files pf JOIN file_revisions fr ON fr.id = pf.file_revision_id
-		WHERE pf.project_id = ? AND fr.complete = 0)`, projectID).Scan(&exists)
-	return exists, err
-}
-
 // CleanupStaleProjects removes memberships not accessed since cutoff, garbage
 // collects data no remaining project references, and incrementally reclaims
 // free pages. Missing project directories are also considered stale.

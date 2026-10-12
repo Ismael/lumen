@@ -118,8 +118,9 @@ source (`CGO_ENABLED=1 go build -tags=fts5`, so a Go toolchain with CGO is
 required) into `bin/lumen`, skipped when `bin/lumen.source-version` matches the
 checkout's version. If the build is impossible or fails, it falls through to any
 existing binary (`bin/lumen`, `bin/lumen-<os>-<arch>`) and only then downloads
-upstream's release binary, which lacks the fork's `lumen status` and
-EnterWorktree hook. The Windows launcher never builds from source.
+upstream's release binary, which lacks the fork's `lumen status`,
+`lumen dupes` and EnterWorktree hook. The Windows launcher never builds from
+source.
 `make build-local` writes no `bin/lumen.source-version` stamp, so unless one is
 left from an earlier launcher build, `scripts/run` rebuilds `bin/lumen` once on
 the first `--plugin-dir` launch.
@@ -180,6 +181,7 @@ their repo-root counterparts. Install-specific entrypoints live in `.codex/`,
 │   ├── hook_enter_worktree.go # PostToolUse EnterWorktree hook
 │   ├── clean.go        # Age-based index data cleanup
 │   ├── status.go       # Read-only embedding-service and index report
+│   ├── dupes.go        # Read-only duplicate-code report from stored embeddings
 │   └── index.go        # CLI indexing
 ├── internal/
 │   ├── config/         # Config loading & paths
@@ -188,6 +190,7 @@ their repo-root counterparts. Install-specific entrypoints live in `.codex/`,
 │   ├── sqlitevec/      # Vendored sqlite-vec v0.1.9 wrapper and sources
 │   ├── chunker/        # Go AST parsing → chunks
 │   ├── embedder/       # Ollama/LM Studio HTTP client
+│   ├── dupes/          # Duplicate-code clustering over chunk embeddings
 │   └── merkle/         # Change detection (SHA-256 tree)
 └── testdata/           # Fixtures for E2E tests
 ```
@@ -196,7 +199,8 @@ their repo-root counterparts. Install-specific entrypoints live in `.codex/`,
 
 Lumen has two execution contexts with distinct output strategies:
 
-**Interactive** (`lumen index`, `lumen clean`, `lumen search`, `lumen status`):
+**Interactive** (`lumen index`, `lumen clean`, `lumen search`, `lumen status`,
+`lumen dupes`):
 
 - Progress and status → `tui.Progress` (pterm) on **stderr**
 - Completion summaries → `fmt.Printf` on **stdout**

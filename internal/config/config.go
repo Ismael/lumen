@@ -33,8 +33,9 @@ const (
 	BackendLMStudio = "lmstudio"
 )
 
-// DBPathForProject returns the default int8/512-token collection path. New
-// runtime code with non-default settings should use DBPathForProjectProfile.
+// DBPathForProject returns the collection path for the int8/512-token profile
+// with registry dimensions, ignoring user configuration. Lookups of existing
+// indexes must use the configured profile via DBPathForProjectProfile.
 func DBPathForProject(projectPath, model string) string {
 	return DBPathForProjectBase(XDGDataDir(), projectPath, model)
 }
