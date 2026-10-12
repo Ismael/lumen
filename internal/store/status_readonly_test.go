@@ -312,28 +312,3 @@ func TestReadCollectionSnapshot_RejectsNonIndexFiles(t *testing.T) {
 		})
 	}
 }
-
-func TestReadCollectionSnapshot_ReportsIncompleteFiles(t *testing.T) {
-	base := t.TempDir()
-	dbPath := filepath.Join(base, "index.db")
-	projectA := filepath.Join(base, "a")
-	s := seedTwoProjectCollection(t, dbPath, projectA, filepath.Join(base, "b"))
-	snap, err := ReadCollectionSnapshot(dbPath, projectA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snap.Project == nil || snap.Project.HasIncompleteFiles {
-		t.Fatalf("complete project: %+v, want HasIncompleteFiles false", snap.Project)
-	}
-	if err := s.UpsertFile("pending.go", ""); err != nil {
-		t.Fatal(err)
-	}
-	_ = s.Close()
-	snap, err = ReadCollectionSnapshot(dbPath, projectA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snap.Project == nil || !snap.Project.HasIncompleteFiles {
-		t.Errorf("project with sentinel revision: %+v, want HasIncompleteFiles true", snap.Project)
-	}
-}

@@ -381,24 +381,6 @@ func TestCollectStatus_NonDefaultProfileAndStaleness(t *testing.T) {
 	if reverted.stale != "no" {
 		t.Errorf("after reverting the edit stale = %q, want no", reverted.stale)
 	}
-
-	// An interrupted index leaves incomplete revisions while root_hash may
-	// already match the tree; the indexer treats that as needing a reindex.
-	s, err := store.NewCollection(dbPath, 4, cfg.VectorStorage(), project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.UpsertFile("pending.go", ""); err != nil {
-		t.Fatal(err)
-	}
-	_ = s.Close()
-	incomplete, err := collectStatus(context.Background(), cfg, project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if incomplete.stale != "yes" {
-		t.Errorf("with incomplete revisions stale = %q, want yes", incomplete.stale)
-	}
 }
 
 func TestCollectStatus_FindsNonGitAncestorUnderConfiguredProfile(t *testing.T) {

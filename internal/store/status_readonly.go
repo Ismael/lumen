@@ -49,10 +49,7 @@ type ProjectSnapshot struct {
 	Path   string
 	Files  int
 	Chunks int
-	// HasIncompleteFiles marks revisions left by an interrupted index run,
-	// which the indexer reindexes even when root_hash matches.
-	HasIncompleteFiles bool
-	Meta               map[string]string
+	Meta   map[string]string
 }
 
 // ProjectSummary describes one project membership of a collection.
@@ -205,9 +202,6 @@ func readProjectSnapshot(tx *sql.Tx, projectPath string) (*ProjectSnapshot, erro
 		(SELECT count(*) FROM chunk_defs cd JOIN project_files pf ON pf.file_revision_id = cd.file_revision_id WHERE pf.project_id = ?)`,
 		id, id).Scan(&p.Files, &p.Chunks); err != nil {
 		return nil, fmt.Errorf("project counts: %w", err)
-	}
-	if p.HasIncompleteFiles, err = projectHasSentinelFiles(tx, id); err != nil {
-		return nil, fmt.Errorf("check incomplete files: %w", err)
 	}
 	rows, err := tx.Query(`SELECT key, value FROM project_meta WHERE project_id = ?`, id)
 	if err != nil {
