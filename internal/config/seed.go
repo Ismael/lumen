@@ -24,15 +24,10 @@ import (
 )
 
 // FindDonorIndex searches sibling git worktrees for an existing lumen index
-// DB that uses the same model and IndexVersion. Returns the DB path of the
-// most recently modified candidate, or "" if no suitable donor exists.
-func FindDonorIndex(projectPath, model string) string {
-	return FindDonorIndexBase(XDGDataDir(), projectPath, model)
-}
-
-// FindDonorIndexBase is like FindDonorIndex but accepts an explicit data
-// directory, making it safe for testing without side effects.
-func FindDonorIndexBase(dataDir, projectPath, model string) string {
+// DB, resolving each sibling's path with dbPathFor so only collections of the
+// caller's profile qualify. Returns the DB path of the most recently modified
+// candidate, or "" if no suitable donor exists.
+func FindDonorIndex(projectPath string, dbPathFor func(projectPath string) string) string {
 	worktrees, err := git.ListWorktrees(projectPath)
 	if err != nil || len(worktrees) < 2 {
 		return ""
@@ -98,7 +93,7 @@ func FindDonorIndexBase(dataDir, projectPath, model string) string {
 		}
 		// Look for a DB at the same relative subdirectory in the sibling worktree.
 		siblingProject := filepath.Join(resolved, relSuffix)
-		dbPath := DBPathForProjectBase(dataDir, siblingProject, model)
+		dbPath := dbPathFor(siblingProject)
 		info, err := os.Stat(dbPath)
 		if err != nil {
 			continue

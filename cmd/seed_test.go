@@ -81,10 +81,10 @@ func TestSeedFromDonorIfNew(t *testing.T) {
 				context.Background(),
 				dbPath,
 				"/project",
-				"model",
+				nil,
 				seedTestLogger(),
 				seedOptions{
-					findDonor: func(_, _ string) string {
+					findDonor: func(string, func(string) string) string {
 						findCalled = true
 						return tt.donor
 					},

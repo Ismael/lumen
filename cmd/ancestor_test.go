@@ -22,6 +22,12 @@ import (
 	"github.com/ory/lumen/internal/config"
 )
 
+// defaultDBPathFor resolves collection paths under the built-in default
+// profile, which is what tests without a config file index with.
+func defaultDBPathFor(model string) func(string) string {
+	return func(projectPath string) string { return config.DBPathForProject(projectPath, model) }
+}
+
 func TestFindAncestorIndex(t *testing.T) {
 	const model = "test-model"
 
@@ -29,7 +35,7 @@ func TestFindAncestorIndex(t *testing.T) {
 		tmpDir := t.TempDir()
 		t.Setenv("XDG_DATA_HOME", tmpDir)
 
-		got := findAncestorIndex("/some/deep/nonexistent/path", model)
+		got := findAncestorIndex("/some/deep/nonexistent/path", defaultDBPathFor(model))
 		if got != "" {
 			t.Fatalf("expected empty string, got %q", got)
 		}
@@ -48,7 +54,7 @@ func TestFindAncestorIndex(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got := findAncestorIndex("/project/scripts/util", model)
+		got := findAncestorIndex("/project/scripts/util", defaultDBPathFor(model))
 		if got != "/project" {
 			t.Fatalf("expected /project, got %q", got)
 		}
@@ -69,7 +75,7 @@ func TestFindAncestorIndex(t *testing.T) {
 
 		// "testdata" is in merkle.SkipDirs — the parent index would never
 		// contain these files, so findAncestorIndex must return "".
-		got := findAncestorIndex("/project/testdata/fixtures/go", model)
+		got := findAncestorIndex("/project/testdata/fixtures/go", defaultDBPathFor(model))
 		if got != "" {
 			t.Fatalf("expected empty string (skip dir in route), got %q", got)
 		}
@@ -80,7 +86,7 @@ func TestFindAncestorIndex(t *testing.T) {
 		t.Setenv("XDG_DATA_HOME", tmpDir)
 
 		// No DBs exist anywhere — should return "" without panic.
-		got := findAncestorIndex("/a/b/c/d/e", model)
+		got := findAncestorIndex("/a/b/c/d/e", defaultDBPathFor(model))
 		if got != "" {
 			t.Fatalf("expected empty string, got %q", got)
 		}
@@ -109,7 +115,7 @@ func TestFindAncestorIndex(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got := findAncestorIndex(filepath.Join(ancestor, "sub", "deep"), model)
+		got := findAncestorIndex(filepath.Join(ancestor, "sub", "deep"), defaultDBPathFor(model))
 		if got != "" {
 			t.Fatalf("expected empty (ancestor declared un-indexable), got %q", got)
 		}
@@ -131,7 +137,7 @@ func TestFindAncestorIndex(t *testing.T) {
 		}
 
 		// Searching from /project/src/pkg should find /project/src (nearest).
-		got := findAncestorIndex("/project/src/pkg", model)
+		got := findAncestorIndex("/project/src/pkg", defaultDBPathFor(model))
 		if got != "/project/src" {
 			t.Fatalf("expected /project/src (nearest ancestor), got %q", got)
 		}

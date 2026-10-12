@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ory/lumen/internal/config"
 	"github.com/ory/lumen/internal/git"
 	"github.com/ory/lumen/internal/merkle"
 )
@@ -26,19 +25,19 @@ import (
 // resolveProjectRoot normalises path to the project root that owns its index:
 // the git repository root, else (outside git) an ancestor that already has an
 // index, else path itself.
-func resolveProjectRoot(path, model string) string {
+func resolveProjectRoot(path string, dbPathFor func(projectPath string) string) string {
 	if root, err := git.RepoRoot(path); err == nil {
 		return root
 	}
-	if ancestor := findAncestorIndex(path, model); ancestor != "" {
+	if ancestor := findAncestorIndex(path, dbPathFor); ancestor != "" {
 		return ancestor
 	}
 	return path
 }
 
 // findAncestorIndex walks up from path's parent directory, checking whether
-// any ancestor has an existing lumen index DB on disk. Returns the ancestor
-// path if found, or "" if none exists.
+// any ancestor has an existing lumen index DB at the path dbPathFor resolves
+// for it. Returns the ancestor path if found, or "" if none exists.
 //
 // This is the CLI equivalent of indexerCache.findEffectiveRoot for one-shot
 // commands (index, search, hook) that don't maintain an in-memory cache.
@@ -46,12 +45,12 @@ func resolveProjectRoot(path, model string) string {
 //
 // Unlike findEffectiveRoot (MCP), this does not cap the walk at the git root
 // because callers have already confirmed path is not inside a git repo.
-func findAncestorIndex(path, model string) string {
+func findAncestorIndex(path string, dbPathFor func(projectPath string) string) string {
 	candidate := filepath.Dir(path)
 	for {
 		unindexable, _ := merkle.IsRootUnindexable(candidate)
 		if !pathCrossesSkipDir(candidate, path) && !unindexable {
-			if _, err := os.Stat(config.DBPathForProject(candidate, model)); err == nil {
+			if _, err := os.Stat(dbPathFor(candidate)); err == nil {
 				return candidate
 			}
 		}

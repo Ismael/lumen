@@ -1360,7 +1360,7 @@ func TestGetOrCreate_ReturnsSeedWarningWhenSeedFails(t *testing.T) {
 	ic := &indexerCache{
 		embedder:      &stubEmbedder{},
 		cfg:           newTestConfigService(t, 512),
-		findDonorFunc: func(_, _ string) string { return "/fake/donor.db" },
+		findDonorFunc: func(string, func(string) string) string { return "/fake/donor.db" },
 		seedFunc: func(_ context.Context, _, _, _ string) (bool, error) {
 			return false, fmt.Errorf("permission denied")
 		},
@@ -1396,7 +1396,7 @@ func TestGetOrCreate_SeedCancelledByClose(t *testing.T) {
 		cfg:           newTestConfigService(t, 512),
 		closeCtx:      closeCtx,
 		closeFn:       closeFn,
-		findDonorFunc: func(_, _ string) string { return "/fake/donor.db" },
+		findDonorFunc: func(string, func(string) string) string { return "/fake/donor.db" },
 		seedFunc: func(ctx context.Context, _, _, _ string) (bool, error) {
 			close(seedStarted)
 			<-ctx.Done()

@@ -128,7 +128,7 @@ func runDupes(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	model := newEmbedder(cfg).ModelName()
-	root, searchPath, err := resolveIndexRoot(target, "", model)
+	root, searchPath, err := resolveIndexRoot(target, "", configuredDBPathFor(cfg, model))
 	if err != nil {
 		return err
 	}

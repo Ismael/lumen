@@ -80,7 +80,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	// Normalize so that indexing a subdirectory produces the same DB as
 	// indexing the repo root.
-	projectPath = resolveProjectRoot(projectPath, modelName)
+	projectPath = resolveProjectRoot(projectPath, configuredDBPathFor(cfg, modelName))
 
 	// Re-check after normalization: git.RepoRoot can resolve upward to an
 	// un-indexable root (e.g. a git repo rooted at $HOME) and bypass the
@@ -222,6 +222,12 @@ func setupIndexer(cfg *config.ConfigService, emb *embedder.FailoverEmbedder, dbP
 func configuredDBPath(cfg *config.ConfigService, projectPath, model string) string {
 	dimensions := cfg.ServerDims(0)
 	return config.DBPathForProjectProfile(projectPath, model, dimensions, cfg.VectorStorage(), cfg.MaxChunkTokens())
+}
+
+// configuredDBPathFor binds configuredDBPath to cfg and model for resolvers
+// that probe several candidate project paths.
+func configuredDBPathFor(cfg *config.ConfigService, model string) func(projectPath string) string {
+	return func(projectPath string) string { return configuredDBPath(cfg, projectPath, model) }
 }
 
 func setupIndexerForProject(cfg *config.ConfigService, emb *embedder.FailoverEmbedder, dbPath, projectPath string, logger *slog.Logger) (*index.Indexer, error) {

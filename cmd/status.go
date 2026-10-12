@@ -167,7 +167,7 @@ func collectStatus(ctx context.Context, cfg *config.ConfigService, target string
 	r.servers = probeServers(ctx, cfg.Servers())
 	r.model = activeModel(r.servers)
 
-	root, _, err := resolveIndexRoot(target, "", r.model)
+	root, _, err := resolveIndexRoot(target, "", configuredDBPathFor(cfg, r.model))
 	if err != nil {
 		return r, err
 	}

@@ -401,6 +401,38 @@ func TestCollectStatus_NonDefaultProfileAndStaleness(t *testing.T) {
 	}
 }
 
+func TestCollectStatus_FindsNonGitAncestorUnderConfiguredProfile(t *testing.T) {
+	statusTestEnv(t, true)
+	t.Setenv("LUMEN_VECTOR_STORAGE", "float32")
+	cfg, err := config.NewConfigService(config.DefaultConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ancestor, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(ancestor, "pkg", "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := configuredDBPath(cfg, ancestor, embedder.DefaultModel)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dbPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := collectStatus(context.Background(), cfg, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.root != ancestor {
+		t.Errorf("root = %q, want the ancestor %q indexed under the configured profile", r.root, ancestor)
+	}
+}
+
 func TestCollectStatus_OtherWorktreeOnlyAndLegacy(t *testing.T) {
 	dataDir := statusTestEnv(t, true)
 	cfg, err := config.NewConfigService(config.DefaultConfigPath())
