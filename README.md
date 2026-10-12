@@ -100,7 +100,8 @@ Verify by starting a new Claude session and running `/lumen:doctor`.
 
 **Claude Code (fork marketplace)**
 
-This fork adds [`lumen status`](#cli-reference) and the worktree-aware
+This fork adds [`lumen status`](#cli-reference),
+[`lumen dupes`](#cli-reference) and the worktree-aware
 [Claude Code hooks](#claude-code-hooks). It installs from its own marketplace
 (`.claude-plugin/marketplace.json`):
 
@@ -487,21 +488,23 @@ embeddings already stored in the index. `dir` defaults to the current directory
 and resolves to the same index as `lumen search`; a subdirectory limits the
 comparison to chunks under it. The command is read-only: it never reindexes,
 never asks the embedding server for embeddings and never modifies the index, so
-run `lumen index` first. Example:
+run `lumen index` first. Example, abbreviated to its first cluster:
 
 ```text
 #1  2 chunks · 90 lines · similarity 0.96
   src/services/mediaService.ts:417-470   disconnectMediaFromClip (method)
   src/services/uploadService.ts:70-105   disconnectMediaFromClip (method)
 
-Showing 1 of 87 clusters · 6207 chunks compared · threshold 0.93 · model text-embedding-qwen3-embedding-0.6b
+#2  ...
+
+Showing 20 of 87 clusters · 6207 chunks compared · threshold 0.93 · model text-embedding-qwen3-embedding-0.6b
 ```
 
 - Flags: `--threshold` (default `0.93`, allowed `0.80`–`1.0`), `--min-lines`
   (default `5`), `--limit` (clusters shown, default `20`, `0` shows all),
   `--no-tests` (skip test files), plus `--model` and `--backend` as for
   `lumen status`.
-- Clusters are ordered by total lines, then similarity. A cluster shows its
+- Clusters are ordered by the distinct lines they cover, then similarity. A cluster shows its
   strongest similarity, or a `min–max` range when its links differ. The footer
   adds the directory scope and, if any, the number of files that were
   mid-index and skipped.
@@ -509,6 +512,10 @@ Showing 1 of 87 clusters · 6207 chunks compared · threshold 0.93 · model text
   and above were almost all real copy-paste, 0.93–0.95 mostly real, and below
   about 0.88 mostly merely related code. Other models may need a different
   `--threshold`.
+- The default was calibrated on `float32` storage; `int8`, the default storage,
+  shifts scores slightly.
+- Copies in different files score just below 1.0 because the file path is part
+  of the embedding input, so use 0.97–0.99, not 1.0, for near-exact copies.
 - Limitations:
   - Clustering is single-linkage, so at lower thresholds related but different
     code can chain into one cluster. The similarity range describes the links,

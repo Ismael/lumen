@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -56,6 +57,11 @@ chain of pairs above the threshold connects them. The similarity shown for a
 cluster is the range over those links, not over every pair of members, so at
 lower thresholds related but different code can chain into one cluster.
 
+Copies in different files score just below 1.0 because the file path is part of
+the embedding input, so --threshold 1.0 finds almost nothing; use 0.97-0.99 for
+near-exact copies. The 0.93 default was calibrated on float32 storage, and int8
+(the default storage) shifts scores slightly.
+
 Only functions, methods, constants, variables, interfaces and types are
 compared; documentation chunks are not. A function longer than the chunk limit
 is split, so a copy of it can appear as several clusters. Outside a git
@@ -66,7 +72,7 @@ int8/512 profile.`,
 	}
 	c.Flags().StringP("model", "m", "", "embedding model (default: $LUMEN_EMBED_MODEL or "+embedder.DefaultModel+")")
 	c.Flags().StringP("backend", "b", "", "embedding backend to select (\"ollama\" or \"lmstudio\"); disambiguates when --model is configured on multiple backends")
-	c.Flags().Float32("threshold", dupesDefaultThreshold, "minimum cosine similarity, between 0.80 and 1.0; the default was calibrated on qwen3-embedding-0.6b and other models may need tuning")
+	c.Flags().Float32("threshold", dupesDefaultThreshold, "minimum cosine similarity, between 0.80 and 1.0; the default was calibrated on qwen3-embedding-0.6b with float32 storage and other models may need tuning")
 	c.Flags().Int("min-lines", 5, "ignore chunks shorter than this many lines")
 	c.Flags().Int("limit", 20, "maximum number of clusters to show (0 shows all)")
 	c.Flags().Bool("no-tests", false, "exclude test files")
@@ -96,7 +102,7 @@ func readDupesFlags(cmd *cobra.Command) (dupesFlags, error) {
 		return f, err
 	}
 	switch {
-	case f.threshold < dupesMinThreshold || f.threshold > dupesMaxThreshold:
+	case math.IsNaN(float64(f.threshold)) || f.threshold < dupesMinThreshold || f.threshold > dupesMaxThreshold:
 		return f, fmt.Errorf("invalid --threshold %v: must be between %.2f and %.1f", f.threshold, dupesMinThreshold, dupesMaxThreshold)
 	case f.minLines < 1:
 		return f, fmt.Errorf("invalid --min-lines %d: must be at least 1", f.minLines)
@@ -128,7 +134,7 @@ func runDupes(cmd *cobra.Command, args []string) error {
 	}
 	info, err := os.Stat(searchPath)
 	if err != nil {
-		return fmt.Errorf("stat %s: %w", searchPath, err)
+		return err
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("%s is not a directory: dupes takes a directory", searchPath)
@@ -146,7 +152,7 @@ func runDupes(cmd *cobra.Command, args []string) error {
 	pv, err := store.ReadProjectVectors(dbPath, root)
 	switch {
 	case errors.Is(err, os.ErrNotExist), errors.Is(err, store.ErrProjectNotFound):
-		return fmt.Errorf("%s is not indexed for model %s: run `lumen index %s` first", root, model, root)
+		return fmt.Errorf("%s is not indexed for model %s: run `%s` first", root, model, dupesIndexHint(cmd, root))
 	case err != nil:
 		return fmt.Errorf("read index %s: %w", dbPath, err)
 	}
@@ -162,6 +168,18 @@ func runDupes(cmd *cobra.Command, args []string) error {
 		scope:           rel,
 		incompleteFiles: pv.IncompleteFiles,
 	})
+}
+
+// dupesIndexHint is the `lumen index` command that builds the collection dupes
+// reads, repeating the user's --model and --backend.
+func dupesIndexHint(cmd *cobra.Command, root string) string {
+	parts := []string{"lumen index"}
+	for _, name := range []string{"model", "backend"} {
+		if v, _ := cmd.Flags().GetString(name); v != "" {
+			parts = append(parts, "--"+name, v)
+		}
+	}
+	return strings.Join(append(parts, root), " ")
 }
 
 // dupesInclude scopes chunks to the directory rel (slash-separated, "." for

@@ -26,7 +26,7 @@ type Cluster struct {
 	Chunks []store.ChunkRef // sorted (RelativePath, StartLine, EndLine, Kind, Symbol, VectorID)
 	MaxSim float32
 	MinSim float32
-	Lines  int // sum of member line counts
+	Lines  int // distinct lines covered by Chunks
 }
 
 // Result holds the clusters found and the number of chunks compared.
@@ -400,6 +400,22 @@ func (c *components) add(l link) {
 	c.maxSim[ri] = max(c.maxSim[ri], l.sim)
 }
 
+// coveredLines counts the distinct lines of chunks sorted by (RelativePath,
+// StartLine), so overlapping split pieces count their shared lines once.
+func coveredLines(chunks []store.ChunkRef) int {
+	total, last := 0, 0
+	for i, c := range chunks {
+		if i == 0 || c.RelativePath != chunks[i-1].RelativePath {
+			last = c.StartLine - 1
+		}
+		if c.EndLine > last {
+			total += c.EndLine - max(c.StartLine, last+1) + 1
+			last = c.EndLine
+		}
+	}
+	return total
+}
+
 func buildClusters(rows []row, links []link) []Cluster {
 	comps := newComponents(len(rows))
 	for _, l := range links {
@@ -423,7 +439,9 @@ func buildClusters(rows []row, links []link) []Cluster {
 			})
 		}
 		clusters[ci].Chunks = append(clusters[ci].Chunks, r.ref)
-		clusters[ci].Lines += lineCount(r.ref)
+	}
+	for i := range clusters {
+		clusters[i].Lines = coveredLines(clusters[i].Chunks)
 	}
 
 	slices.SortStableFunc(clusters, func(a, b Cluster) int {

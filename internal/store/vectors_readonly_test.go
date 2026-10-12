@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -386,6 +387,16 @@ func TestReadProjectVectors_Errors(t *testing.T) {
 		}, ErrNotCollection},
 		{"zero-byte file", func(t *testing.T, base, dbPath, project string) {
 			if err := os.WriteFile(dbPath, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, ErrNotCollection},
+		{"random bytes", func(t *testing.T, base, dbPath, project string) {
+			data := make([]byte, 4096)
+			rng := rand.New(rand.NewPCG(1, 2))
+			for i := range data {
+				data[i] = byte(rng.UintN(256))
+			}
+			if err := os.WriteFile(dbPath, data, 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}, ErrNotCollection},

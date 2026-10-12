@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/ory/lumen/internal/sqlitevec"
 )
 
@@ -29,8 +30,9 @@ var (
 	ErrNotCollection = errors.New("not a shared collection index")
 	// ErrProjectNotFound means the project has no row in the collection.
 	ErrProjectNotFound = errors.New("project not found in collection")
-	// ErrCorruptIndex means a chunk has no stored vector or a vector's length
-	// disagrees with the collection's dimensions.
+	// ErrCorruptIndex means a chunk has no stored vector, a vector's length
+	// disagrees with the collection's dimensions, or the collection's vector
+	// profile is unusable.
 	ErrCorruptIndex = errors.New("corrupt index")
 )
 
@@ -62,13 +64,13 @@ type ProjectVectors struct {
 func ReadProjectVectors(dbPath, projectPath string) (*ProjectVectors, error) {
 	db, err := openReadOnly(dbPath)
 	if err != nil {
-		return nil, err
+		return nil, classifyNotADB(dbPath, err)
 	}
 	defer func() { _ = db.Close() }()
 
 	shared, err := checkTableExists(db, "collection_meta")
 	if err != nil {
-		return nil, fmt.Errorf("check collection_meta table: %w", err)
+		return nil, classifyNotADB(dbPath, fmt.Errorf("check collection_meta table: %w", err))
 	}
 	if !shared {
 		return nil, fmt.Errorf("%w: %s has no shared collection schema", ErrNotCollection, dbPath)
@@ -144,6 +146,16 @@ func ReadProjectVectors(dbPath, projectPath string) (*ProjectVectors, error) {
 		return nil, fmt.Errorf("read chunks: %w", err)
 	}
 	return pv, nil
+}
+
+// classifyNotADB marks SQLite's not-a-database error as ErrNotCollection and
+// returns every other error unchanged.
+func classifyNotADB(dbPath string, err error) error {
+	var se sqlite3.Error
+	if errors.As(err, &se) && se.Code == sqlite3.ErrNotADB {
+		return fmt.Errorf("%w: %s: %w", ErrNotCollection, dbPath, err)
+	}
+	return err
 }
 
 // decodeStoredVector decodes a vec_vectors blob. int8 blobs hold signed bytes;

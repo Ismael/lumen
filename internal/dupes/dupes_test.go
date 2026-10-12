@@ -250,7 +250,7 @@ func TestFind(t *testing.T) {
 					ref("a.ts", "X", "const", 5, 10, 8),
 					ref("b.ts", "Y", "function", 1, 10, 1),
 				},
-				MaxSim: 1, MinSim: 1, Lines: 22,
+				MaxSim: 1, MinSim: 1, Lines: 20,
 			}}},
 		},
 		{
@@ -273,7 +273,7 @@ func TestFind(t *testing.T) {
 					ref("b.ts", "X", "const", 361, 416, 8),
 					ref("b.ts", "X", "const", 407, 439, 2),
 				},
-				MaxSim: 1, MinSim: 1, Lines: 56 + 33 + 56 + 33,
+				MaxSim: 1, MinSim: 1, Lines: 79 + 79,
 			}}},
 		},
 		{
@@ -388,7 +388,7 @@ func TestFind(t *testing.T) {
 					ref("a.go", "W", "function", 1, 12, 1),
 					ref("b.go", "Q", "function", 1, 10, 2),
 				},
-				MaxSim: 1, MinSim: 1, Lines: 52,
+				MaxSim: 1, MinSim: 1, Lines: 22,
 			}}},
 		},
 		{
@@ -510,8 +510,8 @@ func TestFind(t *testing.T) {
 			}}},
 		},
 		{
-			// The splitter back-dates each later piece by 10 lines, and both copies
-			// cut at the same boundaries after the first piece.
+			// The splitter back-dates each later piece by up to 10 lines, when it
+			// fits, and both copies cut at the same boundaries after the first piece.
 			name: "split decorated double emission cut at the same boundaries keeps one copy per file",
 			chunks: []store.ChunkRef{
 				ref("a.py", "decorated", "function", 9, 44, 1),
@@ -537,7 +537,7 @@ func TestFind(t *testing.T) {
 					ref("b.py", "decorated", "function", 35, 80, 8),
 					ref("b.py", "decorated", "function", 71, 90, 9),
 				},
-				MaxSim: 1, MinSim: 1, Lines: 204,
+				MaxSim: 1, MinSim: 1, Lines: 82 + 82,
 			}}},
 		},
 		{
@@ -572,8 +572,38 @@ func TestFind(t *testing.T) {
 					ref("b.py", "decorated", "function", 47, 82, 10),
 					ref("b.py", "decorated", "function", 71, 90, 9),
 				},
-				MaxSim: 1, MinSim: 1, Lines: 330,
+				MaxSim: 1, MinSim: 1, Lines: 82 + 82,
 			}}},
+		},
+		{
+			name: "overlapping split pieces count their shared lines once",
+			chunks: []store.ChunkRef{
+				ref("a.go", "F", "function", 1, 40, 1),
+				ref("a.go", "F", "function", 31, 60, 2),
+				ref("b.go", "F", "function", 1, 40, 8),
+				ref("b.go", "F", "function", 31, 60, 10),
+				ref("x.go", "G", "function", 1, 70, 5),
+				ref("y.go", "G", "function", 1, 70, 5),
+			},
+			opts: Options{Threshold: 0.9, MinLines: 1},
+			want: Result{Compared: 6, Clusters: []Cluster{
+				{
+					Chunks: []store.ChunkRef{
+						ref("x.go", "G", "function", 1, 70, 5),
+						ref("y.go", "G", "function", 1, 70, 5),
+					},
+					MaxSim: 1, MinSim: 1, Lines: 140,
+				},
+				{
+					Chunks: []store.ChunkRef{
+						ref("a.go", "F", "function", 1, 40, 1),
+						ref("a.go", "F", "function", 31, 60, 2),
+						ref("b.go", "F", "function", 1, 40, 8),
+						ref("b.go", "F", "function", 31, 60, 10),
+					},
+					MaxSim: 1, MinSim: 1, Lines: 120,
+				},
+			}},
 		},
 		{
 			name: "split pieces of a run are all kept",

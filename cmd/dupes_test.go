@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -129,8 +130,8 @@ func (f *dupesFixture) markIncomplete(t *testing.T, paths ...string) {
 	}
 }
 
-// pair returns two function chunks in different files with identical
-// direction and the given line count.
+// pair returns a function and a method chunk in different files with
+// identical direction and the given line count.
 func pair(symbol string, lines int, pathA, pathB string, vec ...float32) []dupesFixtureChunk {
 	return []dupesFixtureChunk{
 		{pathA, symbol, "function", 10, 10 + lines - 1, vec},
@@ -279,6 +280,9 @@ func TestDupesCommand_SubdirectoryScope(t *testing.T) {
 	if strings.Contains(stdout, "scope") {
 		t.Errorf("root run must not print a scope:\n%s", stdout)
 	}
+	if !strings.Contains(stdout, "src/foobar/c.go") {
+		t.Errorf("root run must include src/foobar/c.go:\n%s", stdout)
+	}
 }
 
 func TestDupesCommand_SimilarityRangeAcrossLinks(t *testing.T) {
@@ -321,6 +325,7 @@ func TestDupesCommand_RejectsInvalidFlags(t *testing.T) {
 	}{
 		{"threshold below range", []string{"--threshold", "0.5"}, "--threshold"},
 		{"threshold above range", []string{"--threshold", "1.1"}, "--threshold"},
+		{"threshold NaN", []string{"--threshold", "NaN"}, "--threshold"},
 		{"min-lines zero", []string{"--min-lines", "0"}, "--min-lines"},
 		{"limit negative", []string{"--limit", "-1"}, "--limit"},
 	}
@@ -339,6 +344,42 @@ func TestDupesCommand_RejectsInvalidFlags(t *testing.T) {
 	}
 }
 
+func TestDupesCommand_RejectsInvalidFlagsBeforeOtherWork(t *testing.T) {
+	statusTestEnv(t, false)
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"--threshold", "NaN"},
+		{"--min-lines", "0"},
+		{"--limit", "-1"},
+	} {
+		_, _, err := execDupes(t, append(args, dir)...)
+		if err == nil || !strings.Contains(err.Error(), "invalid "+args[0]) {
+			t.Errorf("%v: err = %v, want the flag error", args, err)
+		}
+	}
+}
+
+func TestDupesCommand_RegisteredOnRoot(t *testing.T) {
+	c, _, err := rootCmd.Find([]string{"dupes"})
+	if err != nil || c == nil || c.Use != "dupes [dir]" {
+		t.Fatalf("dupes subcommand not registered: %v", err)
+	}
+}
+
+func TestDupesCommand_MissingDirectory(t *testing.T) {
+	f := newDupesFixture(t)
+	f.seed(t, pair("Big", 10, "b/big1.go", "b/big2.go", 1))
+	missing := filepath.Join(f.root, "nonexistent")
+
+	_, _, err := execDupes(t, missing)
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("err = %v, want os.ErrNotExist", err)
+	}
+	if n := strings.Count(err.Error(), "stat "+missing); n != 1 {
+		t.Errorf("err = %q names the stat of %s %d times, want once", err, missing, n)
+	}
+}
+
 func TestDupesCommand_AcceptsBoundaryFlags(t *testing.T) {
 	f := newDupesFixture(t)
 	f.seed(t, pair("Big", 10, "b/big1.go", "b/big2.go", 1))
@@ -353,8 +394,25 @@ func TestDupesCommand_NotIndexed(t *testing.T) {
 	t.Run("no database", func(t *testing.T) {
 		f := newDupesFixture(t)
 		_, _, err := execDupes(t, f.root)
-		if err == nil || !strings.Contains(err.Error(), "not indexed") || !strings.Contains(err.Error(), "lumen index") {
+		if err == nil || !strings.Contains(err.Error(), "not indexed") || !strings.Contains(err.Error(), "`lumen index "+f.root+"`") {
 			t.Errorf("err = %v, want a not-indexed error pointing at lumen index", err)
+		}
+	})
+	t.Run("hint keeps the model and backend flags", func(t *testing.T) {
+		tests := []struct {
+			args []string
+			want string
+		}{
+			{[]string{"-m", embedder.DefaultModel}, "--model " + embedder.DefaultModel},
+			{[]string{"--backend", config.BackendOllama}, "--backend " + config.BackendOllama},
+		}
+		for _, tt := range tests {
+			f := newDupesFixture(t)
+			_, _, err := execDupes(t, append(tt.args, f.root)...)
+			want := "`lumen index " + tt.want + " " + f.root + "`"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%v: err = %v, want it to suggest %s", tt.args, err, want)
+			}
 		}
 	})
 	t.Run("project absent from existing database", func(t *testing.T) {
