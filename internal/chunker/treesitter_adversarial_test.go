@@ -1102,9 +1102,9 @@ union MyUnion {
 	cs := newChunkSet(t, chunks)
 	t.Logf("C++ template chunks:\n%s", cs.dump())
 
-	// template function — currently extracted via function_definition inside template_declaration
+	// template function
 	cs.mustHave("max_val", "function")
-	// template class — class_specifier inside template_declaration
+	// template class
 	cs.mustHave("Container", "type")
 }
 

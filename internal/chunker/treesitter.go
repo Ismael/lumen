@@ -108,6 +108,9 @@ func (c *TreeSitterChunker) Chunk(filePath string, content []byte) ([]Chunk, err
 			if parent := findEnclosingSymbol(declNode, content); parent != "" {
 				symbol = parent + "." + symbol
 			}
+			for p := declNode.Parent(); p != nil && isDeclarationWrapper(p.Type()); p = p.Parent() {
+				declNode = p
+			}
 			startLine := int(declNode.StartPoint().Row) + 1
 			startByte := declNode.StartByte()
 			if comment := findLeadingComments(declNode); comment != nil {
@@ -131,6 +134,12 @@ func (c *TreeSitterChunker) Chunk(filePath string, content []byte) ([]Chunk, err
 // on the grammar.
 func isCommentNode(t string) bool {
 	return t == "comment" || t == "line_comment" || t == "block_comment"
+}
+
+// isDeclarationWrapper reports whether t wraps a declaration (decorators, export, C++ template).
+// Chunks span the wrapper so it and the comments above it belong to the declaration.
+func isDeclarationWrapper(t string) bool {
+	return t == "decorated_definition" || t == "export_statement" || t == "template_declaration"
 }
 
 const maxLeadingCommentLines = 10
