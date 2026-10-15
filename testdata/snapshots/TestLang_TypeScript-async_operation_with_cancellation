@@ -1,8 +1,8 @@
 results: 10
-async.ts:20-22  CancelablePromise+cancel (method)
+async.ts:21-40  cancel+createCancelablePromise (method)
 async.ts:67-70  createCancelablePromise.cancel (method)
 async.ts:273-287  Throttler+dispose (method)
-async.ts:418-449  Delayer+cancel+cancelTimeout+dispose (method)
+async.ts:432-449  cancel+Delayer+cancelTimeout+dispose (method)
 async.ts:478-480  cancel (method)
 async.ts:999-1013  clearPending+TaskQueue (method)
 async.ts:1157-1162  flush (method)

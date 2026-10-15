@@ -1,10 +1,12 @@
-results: 8
-lifecycle.ts:27-47  trackDisposable+IDisposableTracker+setParent+markAsDisposed+markAsSingleton (method)
-lifecycle.ts:416-462  DisposableStore+dispose+clear (method)
+results: 10
+lifecycle.ts:27-47  trackDisposable+setParent+IDisposableTracker+markAsDisposed+markAsSingleton (method)
+lifecycle.ts:85-89  DisposableTracker (type)
+lifecycle.ts:303-309  IDisposable (interface)
+lifecycle.ts:409-415  DisposableStore (type)
+lifecycle.ts:449-462  clear (method)
 lifecycle.ts:487-497  DisposableStore+delete (type)
-lifecycle.ts:526-536  Disposable+dispose (type)
+lifecycle.ts:521-565  Disposable+dispose+MutableDisposable (type)
 lifecycle.ts:580-588  MutableDisposable (type)
-lifecycle.ts:648-659  MandatoryMutableDisposable+dispose (type)
-lifecycle.ts:674-679  release (method)
-lifecycle.ts:745-752  disposeOnReturn (function)
+lifecycle.ts:632-639  MandatoryMutableDisposable (type)
+lifecycle.ts:954-958  thenRegisterOrDispose (function)
 
