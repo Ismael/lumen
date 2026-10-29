@@ -17,6 +17,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,11 +34,6 @@ import (
 // from triggering a full merkle walk when the index was just updated.
 const backgroundIndexStaleness = 5 * time.Minute
 
-const (
-	hookHostClaude = "claude"
-	hookHostCursor = "cursor"
-)
-
 // NOTE: Hooks are now declared in hooks/hooks.json (plugin system).
 // The hook subcommands remain as the execution targets for those declarations.
 
@@ -47,8 +43,6 @@ func init() {
 	hookCmd.AddCommand(hookPreToolUseCmd)
 	hookCmd.AddCommand(hookEnterWorktreeCmd)
 
-	hookSessionStartCmd.Flags().StringVar(&hookSessionStartHost, "host", hookHostClaude, "Hook host output format")
-	hookSessionStartCmd.Flags().StringVar(&hookSessionStartPluginName, "plugin-name", "", "Claude Code plugin name")
 	hookPreToolUseCmd.Flags().StringVar(&hookPreToolUsePluginName, "plugin-name", "", "Claude Code plugin name")
 }
 
@@ -57,17 +51,15 @@ var hookCmd = &cobra.Command{
 	Short: "Hook handlers for AI coding agent integration",
 }
 
-var (
-	hookSessionStartHost       string
-	hookSessionStartPluginName string
-	hookPreToolUsePluginName   string
-)
+var hookPreToolUsePluginName string
 
 var hookSessionStartCmd = &cobra.Command{
-	Use:   "session-start [mcp-name]",
-	Short: "Output SessionStart hook JSON for Claude Code or Cursor",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runHookSessionStart,
+	Use:   "session-start",
+	Short: "Pre-warm the project index in the background at session start",
+	Args:  cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		return sessionStart(os.Stdin, os.Stdout, spawnBackgroundIndexer)
+	},
 }
 
 // hookOutput is the JSON structure Claude Code expects from a synchronous hook.
@@ -82,52 +74,26 @@ type hookSpecificOutput struct {
 	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
 }
 
-type cursorHookOutput struct {
-	AdditionalContext string `json:"additional_context"`
-}
-
 // sessionStartInput is the subset of SessionStart hook input used across hosts.
 type sessionStartInput struct {
 	CWD string `json:"cwd"`
 }
 
-func runHookSessionStart(_ *cobra.Command, args []string) error {
-	mcpName := filepath.Base(os.Args[0])
-	if len(args) > 0 {
-		mcpName = args[0]
-	}
-
-	host, err := normalizeHookHost(hookSessionStartHost)
-	if err != nil {
-		return err
-	}
-
+func sessionStart(stdin io.Reader, stdout io.Writer, bgIndexer func(string)) error {
 	var input sessionStartInput
-	_ = json.NewDecoder(os.Stdin).Decode(&input)
+	_ = json.NewDecoder(stdin).Decode(&input)
 
 	cwd := input.CWD
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
 
-	content := generateSessionContextForHost(host, mcpName, hookSessionStartPluginName, cwd)
-	out := sessionStartOutput(host, content)
+	prewarmIndex(cwd, bgIndexer)
 
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetEscapeHTML(false)
-	return enc.Encode(out)
-}
-
-func generateSessionContextForHost(host, mcpName, pluginName, cwd string) string {
-	return generateSessionContextInternalWithDirective(sessionStartDirective(host, mcpName, pluginName), cwd, spawnBackgroundIndexer)
-}
-
-func sessionStartDirective(host, mcpName, pluginName string) string {
-	if host == hookHostCursor {
-		return "Use the Lumen semantic_search tool first for any code discovery task — before Grep, Bash, or Read."
-	}
-	toolRef := mcpToolReference(pluginName, mcpName, "semantic_search")
-	return "Load and call " + toolRef + " first for any code discovery task — before Grep, Bash, or Read."
+	// Cursor parses hook stdout as JSON; an empty object adds no context in
+	// either Cursor or Claude Code.
+	_, err := io.WriteString(stdout, "{}\n")
+	return err
 }
 
 func mcpToolReference(pluginName, mcpName, toolName string) string {
@@ -137,12 +103,13 @@ func mcpToolReference(pluginName, mcpName, toolName string) string {
 	return "mcp__" + mcpName + "__" + toolName
 }
 
-func generateSessionContextInternalWithDirective(directive, cwd string, bgIndexer func(string)) string {
-	// The directive is the only context surfaced; index state only decides
-	// whether to pre-warm the index in the background.
+// prewarmIndex starts bgIndexer for cwd's project when its index is missing,
+// incomplete, empty, failed or stale, so the first search in the session
+// doesn't pay the full seed + embed cost synchronously.
+func prewarmIndex(cwd string, bgIndexer func(string)) {
 	cfg, err := config.NewConfigService(config.DefaultConfigPath())
 	if err != nil {
-		return directive
+		return
 	}
 	emb := newEmbedder(cfg)
 	modelName := emb.ModelName()
@@ -154,21 +121,19 @@ func generateSessionContextInternalWithDirective(directive, cwd string, bgIndexe
 
 	dbPath := configuredDBPath(cfg, cwd, modelName)
 	if _, err := os.Stat(dbPath); err != nil {
-		// No index yet — kick off background pre-warming so the first search
-		// in this session doesn't pay the full seed + embed cost synchronously.
 		bgIndexer(cwd)
-		return directive
+		return
 	}
 
 	s, err := store.NewCollection(dbPath, dims, cfg.VectorStorage(), cwd)
 	if err != nil {
-		return directive
+		return
 	}
 	defer func() { _ = s.Close() }()
 
 	stats, err := s.Stats()
 	if err != nil {
-		return directive
+		return
 	}
 
 	// An index is only ready after a successful indexing pass produced chunks.
@@ -184,37 +149,6 @@ func generateSessionContextInternalWithDirective(directive, cwd string, bgIndexe
 	}
 	if !completed || stale || stats.TotalChunks == 0 || lastIndexError != "" {
 		bgIndexer(cwd)
-	}
-	return directive
-}
-
-// generateSessionContextInternal is the testable core of generateSessionContextForHost.
-// bgIndexer is injected so tests can verify behaviour without spawning real
-// processes or requiring a live git repository.
-func generateSessionContextInternal(cwd string, bgIndexer func(string)) string {
-	return generateSessionContextInternalWithDirective(sessionStartDirective(hookHostClaude, "lumen", ""), cwd, bgIndexer)
-}
-
-func normalizeHookHost(host string) (string, error) {
-	switch strings.ToLower(host) {
-	case "", hookHostClaude:
-		return hookHostClaude, nil
-	case hookHostCursor:
-		return hookHostCursor, nil
-	default:
-		return "", fmt.Errorf("unsupported hook host %q", host)
-	}
-}
-
-func sessionStartOutput(host, content string) any {
-	if host == hookHostCursor {
-		return cursorHookOutput{AdditionalContext: content}
-	}
-	return hookOutput{
-		HookSpecificOutput: hookSpecificOutput{
-			HookEventName:     "SessionStart",
-			AdditionalContext: content,
-		},
 	}
 }
 

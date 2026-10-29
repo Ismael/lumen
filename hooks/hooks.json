@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/run\" hook session-start lumen --host claude --plugin-name lumen"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/run\" hook session-start"
           }
         ]
       }

@@ -535,10 +535,9 @@ Showing 20 of 87 clusters · 6207 chunks compared · threshold 0.93 · model tex
 
 `hooks/hooks.json` registers two hooks:
 
-- **SessionStart** prints only the directive to use `semantic_search` before
-  Grep, Bash or Read. It also starts background indexing when the worktree's
-  index is missing, incomplete, failed its last run, or was last indexed more
-  than 5 minutes ago (an age check, unlike the content comparison behind
+- **SessionStart** adds nothing to the agent's context. It starts background
+  indexing when the worktree's index is missing, incomplete, failed its last
+  run, or was last indexed more than 5 minutes ago (an age check, unlike the content comparison behind
   `lumen status`'s `Stale`), so indexing gets started early and is usually
   ready by the first search.
 - **PostToolUse** on `EnterWorktree` (`lumen hook enter-worktree`, 45s hook

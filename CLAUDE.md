@@ -129,9 +129,9 @@ The plugin system handles MCP registration, hooks, and skills declaratively
 via:
 
 - `.claude-plugin/plugin.json` — plugin manifest
-- `hooks/hooks.json` — SessionStart hook (`lumen hook session-start`, prints
-  only the semantic-search directive and pre-warms the index in the background
-  when it is missing, incomplete, failed or last indexed over 5 minutes ago;
+- `hooks/hooks.json` — SessionStart hook (`lumen hook session-start`, adds no
+  agent context and only pre-warms the index in the background when it is
+  missing, incomplete, failed or last indexed over 5 minutes ago;
   that is an age check, not `lumen status`'s Merkle staleness) and a
   PostToolUse hook matching `EnterWorktree` (`lumen hook enter-worktree`,
   timeout 45) that indexes the entered worktree and waits up to 30s. No
